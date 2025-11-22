@@ -1,7 +1,8 @@
 # 📘 System-Dokumentation: Plex Smart Refresher (GUI Edition)
 
-**Version:** 1.0
-**Status:** Stable
+![Status](https://img.shields.io/badge/Status-Stable-green)
+![Version](https://img.shields.io/badge/Version-1.0-blue)
+![System](https://img.shields.io/badge/OS-Debian%2012-red)
 
 Ein ressourcenschonendes Python-Tool mit Web-Oberfläche, um fehlende Metadaten in Plex (fehlende Poster, keine Match-ID, unvollständige Infos) zu erkennen und intelligent zu reparieren.
 
@@ -22,47 +23,58 @@ Ein ressourcenschonendes Python-Tool mit Web-Oberfläche, um fehlende Metadaten 
 
 Das Tool wird standardmäßig unter `/opt/plex_gui` installiert.
 
-* `app.py`: Die grafische Oberfläche (Streamlit Dashboard).
-* `logic.py`: Die Backend-Logik (Plex-Verbindung, Smart-Wait, Datenbank).
-* `plexgui.service`: Konfiguration für den System-Autostart.
-* `requirements.txt`: Liste der Python-Abhängigkeiten.
-* `.env`: **WICHTIG** - Beinhaltet Passwörter und Tokens (wird lokal erstellt).
-* `settings.json`: Speichert automatisch die Einstellungen aus der GUI.
-* `refresh_state.db`: Lokale SQLite-Datenbank für die Historie.
+| Datei | Beschreibung |
+| :--- | :--- |
+| `app.py` | Die grafische Oberfläche (Streamlit Dashboard). |
+| `logic.py` | Die Backend-Logik (Plex-Verbindung, Smart-Wait, Datenbank). |
+| `plexgui.service` | Konfiguration für den System-Autostart. |
+| `requirements.txt` | Liste der Python-Abhängigkeiten. |
+| `.env` | **WICHTIG** - Beinhaltet Passwörter und Tokens (wird lokal erstellt). |
+| `settings.json` | Speichert automatisch die Einstellungen aus der GUI. |
+| `refresh_state.db` | Lokale SQLite-Datenbank für die Historie. |
 
 ---
 
 ## 🛠️ Installationsanleitung
 
-Diese Schritte gelten für ein frisches Debian/Ubuntu System (VPS).
+Diese Schritte gelten für ein frisches **Debian 12 System (VPS)**.
 
 ### 1. Voraussetzungen installieren
 Führen Sie folgende Befehle aus, um Python und Pip zu installieren:
 
+```bash
 sudo apt update
 sudo apt install -y python3-venv python3-pip
+```
 
 ### 2. Verzeichnis erstellen & Dateien anlegen
 Wir erstellen den Zielordner und legen die Skripte manuell an.
 
-A. Ordner erstellen:
+**A. Ordner erstellen:**
+```bash
 mkdir -p /opt/plex_gui
 cd /opt/plex_gui
+```
 
-B. Dateien erstellen:
+**B. Dateien erstellen:**
 Kopieren Sie den jeweiligen Quellcode (aus Ihrem Backup oder GitHub) und fügen Sie ihn in die Dateien ein.
 
-Datei 1: Die Benutzeroberfläche
+*Datei 1: Die Benutzeroberfläche*
+```bash
 nano app.py
 # [Hier den Inhalt von app.py einfügen]
 # Speichern: STRG+O -> Enter -> STRG+X
+```
 
-Datei 2: Die Logik
+*Datei 2: Die Logik*
+```bash
 nano logic.py
 # [Hier den Inhalt von logic.py einfügen]
 # Speichern: STRG+O -> Enter -> STRG+X
+```
 
-Datei 3: Die Abhängigkeiten
+*Datei 3: Die Abhängigkeiten*
+```bash
 nano requirements.txt
 # [Inhalt einfügen:]
 # streamlit
@@ -71,49 +83,62 @@ nano requirements.txt
 # requests
 # pandas
 # Speichern: STRG+O -> Enter -> STRG+X
+```
 
-Datei 4: Der Autostart-Dienst
+*Datei 4: Der Autostart-Dienst*
+```bash
 nano plexgui.service
 # [Hier den Inhalt der .service Datei einfügen]
 # Speichern: STRG+O -> Enter -> STRG+X
+```
 
 ### 3. Virtuelle Umgebung (Venv) einrichten
 Wir installieren die benötigten Pakete isoliert:
 
+```bash
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
+```
 
 ### 4. Konfiguration (.env)
-Erstelle eine Datei namens .env. Diese Datei enthält sensible Daten und darf nicht öffentlich geteilt werden.
+Erstelle eine Datei namens `.env`. Diese Datei enthält sensible Daten und darf nicht öffentlich geteilt werden.
 
+```bash
 nano .env
+```
 
-Inhalt:
+**Inhalt:**
+```ini
 PLEX_URL=http://localhost:32400
 PLEX_TOKEN=DEIN_ECHTER_PLEX_TOKEN
 PLEX_TIMEOUT=60
 GUI_PASSWORD=DEIN_GEWUENSCHTES_PASSWORT
-(Speichern mit STRG+O, Beenden mit STRG+X)
+```
+*(Speichern mit STRG+O, Beenden mit STRG+X)*
 
 ### 5. Autostart einrichten (Systemd)
 Damit das Tool immer läuft (24/7) und automatisch startet:
 
 Kopiere die Service-Datei an den System-Ort:
+```bash
 sudo cp plexgui.service /etc/systemd/system/
+```
 
 Aktiviere den Dienst:
+```bash
 sudo systemctl daemon-reload
 sudo systemctl enable plexgui
 sudo systemctl start plexgui
-(Hinweis: Der Service-Befehl erzwingt den Dark Mode und die Akzentfarbe).
+```
+*(Hinweis: Der Service-Befehl erzwingt den Dark Mode und die Akzentfarbe).*
 
 ---
 
 ## 🖥️ Bedienung
 
-Öffne deinen Browser: http://DEINE-SERVER-IP:8501
-Logge dich mit dem Passwort aus der .env Datei ein.
+Öffne deinen Browser: `http://DEINE-SERVER-IP:8501`  
+Logge dich mit dem Passwort aus der `.env` Datei ein.
 
 ### Dashboard Funktionen
 * **Bibliotheken:** Wähle aus, welche Mediatheken gescannt werden.
@@ -127,11 +152,17 @@ Logge dich mit dem Passwort aus der .env Datei ein.
 
 ## ❓ Wartung & Befehle
 
-Status prüfen (RAM Verbrauch & Laufzeit):
+**Status prüfen (RAM Verbrauch & Laufzeit):**
+```bash
 systemctl status plexgui
+```
 
-Logs live ansehen (Fehlersuche):
+**Logs live ansehen (Fehlersuche):**
+```bash
 journalctl -u plexgui -f
+```
 
-Tool neu starten (nach Updates oder Config-Änderung):
+**Tool neu starten (nach Updates oder Config-Änderung):**
+```bash
 systemctl restart plexgui
+```
