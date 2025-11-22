@@ -1,0 +1,14 @@
+[Unit]
+Description=Plex Smart Refresher GUI
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory=/opt/plex_gui
+Environment="PATH=/opt/plex_gui/venv/bin"
+ExecStart=/opt/plex_gui/venv/bin/streamlit run app.py --server.port 8501 --server.address 0.0.0.0 --theme.base="dark" --theme.primaryColor="#e5a00d"
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
