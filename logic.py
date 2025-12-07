@@ -5,19 +5,28 @@ import sqlite3
 import gc
 import time
 import json
+import logging
 import threading
 from typing import List, Optional, Tuple, Dict, Any
 from plexapi.server import PlexServer
 from dotenv import load_dotenv
 import notifications
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 load_dotenv()
 PLEX_URL = os.getenv("PLEX_URL")
 PLEX_TOKEN = os.getenv("PLEX_TOKEN")
 try:
     PLEX_TIMEOUT = int(os.getenv("PLEX_TIMEOUT", "60"))
-except:
+except ValueError:
     PLEX_TIMEOUT = 60
+    logger.warning("Invalid PLEX_TIMEOUT value, using default: 60")
 
 DB_PATH = "refresh_state.db"
 SETTINGS_FILE = "settings.json"
@@ -55,7 +64,8 @@ def load_settings():
         with open(SETTINGS_FILE, "r") as f:
             data = json.load(f)
             return {**default, **data}
-    except:
+    except (json.JSONDecodeError, IOError) as e:
+        logger.error(f"Error loading settings: {e}")
         return default
 
 def save_settings(settings):
@@ -63,7 +73,7 @@ def save_settings(settings):
         with open(SETTINGS_FILE, "w") as f:
             json.dump(settings, f, indent=4)
     except Exception as e:
-        print(f"Fehler beim Speichern: {e}")
+        logger.error(f"Error saving settings: {e}")
 
 # --- DATABASE ---
 def init_db():
@@ -301,7 +311,7 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
 
 # --- SCHEDULER ---
 def run_scheduler_thread():
-    print("⏰ Hintergrund-Scheduler gestartet.")
+    logger.info("⏰ Hintergrund-Scheduler gestartet.")
     last_run_date = None
 
     while True:
@@ -314,11 +324,11 @@ def run_scheduler_thread():
                 current_date_str = now.strftime("%Y-%m-%d")
 
                 if current_time_str == target_time_str and last_run_date != current_date_str:
-                    print(f"⏰ ZEITPLAN AUSLÖSUNG: {current_time_str}")
-                    def dummy_log(msg): print(f"[AUTO-SCAN] {msg}")
+                    logger.info(f"⏰ ZEITPLAN AUSLÖSUNG: {current_time_str}")
+                    def dummy_log(msg): logger.info(f"[AUTO-SCAN] {msg}")
                     asyncio.run(run_scan_engine(None, dummy_log, settings))
                     last_run_date = current_date_str
             time.sleep(59)
         except Exception as e:
-            print(f"Scheduler Fehler: {e}")
+            logger.error(f"Scheduler Fehler: {e}")
             time.sleep(60)

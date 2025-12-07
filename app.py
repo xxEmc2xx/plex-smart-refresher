@@ -353,7 +353,7 @@ def main():
         st.subheader("🕒 Zeitplaner")
         try:
             saved_time = dt.datetime.strptime(current_settings["schedule_time"], "%H:%M").time()
-        except:
+        except ValueError:
             saved_time = dt.time(4, 0)
             
         s_time = st.time_input("Startzeit", value=saved_time)

@@ -3,6 +3,16 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+# Sensitive data
+.env
+settings.json
+refresh_state.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 .Python
 
 # Virtual environments
@@ -23,3 +33,9 @@ settings.json
 # OS
 .DS_Store
 Thumbs.db
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
