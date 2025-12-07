@@ -58,15 +58,14 @@ def send_scan_completion_notification(stats: Dict[str, int]) -> bool:
     failed = stats.get('failed', 0)
     
     # Erfolgsrate berechnen
-    success_rate = (fixed / (fixed + failed) * 100) if (fixed + failed) > 0 else 0
-    
-    # Emoji basierend auf Erfolgsrate
-    if success_rate >= 80:
-        rate_emoji = "🟢"
-    elif success_rate >= 50:
-        rate_emoji = "🟡"
+    problems_found = fixed + failed
+    if problems_found > 0:
+        success_rate = (fixed / problems_found * 100)
+        rate_emoji = "🟢" if success_rate >= 80 else "🟡" if success_rate >= 50 else "🔴"
+        rate_text = f"{rate_emoji} {success_rate:.1f}%"
     else:
-        rate_emoji = "🔴"
+        # Keine Probleme gefunden = perfekt!
+        rate_text = "✨ Keine Probleme gefunden"
     
     message = f"""
 🚀 <b>Plex Smart Refresher - Scan abgeschlossen</b>
@@ -75,7 +74,7 @@ def send_scan_completion_notification(stats: Dict[str, int]) -> bool:
 • Geprüft: {checked}
 • Gefixt: {fixed} ✅
 • Fehler: {failed} ❌
-• Erfolgsrate: {rate_emoji} {success_rate:.1f}%
+• Ergebnis: {rate_text}
 """
     
     return send_telegram_message(message.strip())

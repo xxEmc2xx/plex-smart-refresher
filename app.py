@@ -151,23 +151,29 @@ def main():
                 failed = st.session_state.scan_stats['failed']
                 
                 # Erfolgsrate berechnen
-                success_rate = (fixed / checked * 100) if checked > 0 else 0
-                
-                # Farbe basierend auf Erfolgsrate
-                if success_rate >= 80:
-                    rate_color = "normal"
-                    rate_emoji = "🟢"
-                elif success_rate >= 50:
-                    rate_color = "normal"
-                    rate_emoji = "🟡"
+                problems_found = fixed + failed
+                if problems_found > 0:
+                    success_rate = (fixed / problems_found * 100)
+                    # Farbe basierend auf Erfolgsrate
+                    if success_rate >= 80:
+                        rate_color = "normal"
+                        rate_emoji = "🟢"
+                    elif success_rate >= 50:
+                        rate_color = "normal"
+                        rate_emoji = "🟡"
+                    else:
+                        rate_color = "inverse"
+                        rate_emoji = "🔴"
+                    rate_text = f"{rate_emoji} {success_rate:.1f}%"
                 else:
-                    rate_color = "inverse"
-                    rate_emoji = "🔴"
+                    # Keine Probleme gefunden
+                    rate_text = "✨ Alles OK"
+                    rate_color = "normal"
                 
                 c1.metric("Geprüft", checked)
                 c2.metric("Gefixt", fixed)
                 c3.metric("Fehler", failed)
-                c4.metric("Erfolgsrate", f"{rate_emoji} {success_rate:.1f}%")
+                c4.metric("Erfolgsrate", rate_text)
         else:
             with stats_container:
                 c1, c2, c3, c4 = st.columns(4)
