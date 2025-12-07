@@ -10,6 +10,7 @@ import threading
 from typing import List, Optional, Tuple, Dict, Any
 from plexapi.server import PlexServer
 from dotenv import load_dotenv
+import notifications
 
 # Configure logging
 logging.basicConfig(
@@ -29,6 +30,23 @@ except ValueError:
 
 DB_PATH = "refresh_state.db"
 SETTINGS_FILE = "settings.json"
+
+# Connection Pooling - Singleton Pattern
+_plex_connection = None
+
+
+def get_plex_connection():
+    """
+    Globale Plex-Verbindung als Singleton mit Auto-Reconnect.
+    """
+    global _plex_connection
+    if _plex_connection is None:
+        try:
+            _plex_connection = PlexServer(PLEX_URL, PLEX_TOKEN, timeout=PLEX_TIMEOUT)
+        except Exception as e:
+            print(f"Fehler beim Herstellen der Plex-Verbindung: {e}")
+            raise
+    return _plex_connection
 
 # --- SETTINGS ---
 def load_settings():
@@ -103,6 +121,33 @@ def get_last_report(limit=100, only_fixed=False):
     conn.close()
     return rows
 
+
+def get_total_statistics():
+    """
+    Berechnet Gesamtstatistiken aus der Datenbank.
+    
+    Returns:
+        Dictionary mit total_checked, total_fixed, total_failed, success_rate
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # Zähle alle Einträge
+    total_checked = c.execute("SELECT COUNT(*) FROM media_state").fetchone()[0]
+    total_fixed = c.execute("SELECT COUNT(*) FROM media_state WHERE state='fixed'").fetchone()[0]
+    total_failed = c.execute("SELECT COUNT(*) FROM media_state WHERE state='failed'").fetchone()[0]
+    
+    conn.close()
+    
+    success_rate = (total_fixed / total_checked * 100) if total_checked > 0 else 0
+    
+    return {
+        "total_checked": total_checked,
+        "total_fixed": total_fixed,
+        "total_failed": total_failed,
+        "success_rate": success_rate
+    }
+
 # --- PLEX LOGIC ---
 def needs_refresh(item) -> bool:
     if not item.guids: return True
@@ -127,20 +172,49 @@ async def smart_refresh_item(item, status_callback=None) -> Tuple[bool, str]:
             pass
     return False, "Timeout (60s)"
 
+
+async def batch_refresh_items(items, batch_size=5, log_callback=None):
+    """
+    Mehrere Items parallel refreshen mit asyncio.gather für bessere Performance.
+    
+    Args:
+        items: Liste von Items zum Refreshen
+        batch_size: Anzahl gleichzeitiger Refresh-Operationen
+        log_callback: Optional callback für Logging
+        
+    Returns:
+        Liste von Tuples (success, message) für jedes Item
+    """
+    results = []
+    total_items = len(items)
+    
+    for i in range(0, total_items, batch_size):
+        batch = items[i:i+batch_size]
+        if log_callback:
+            log_callback(f"Batch {i//batch_size + 1}: Verarbeite {len(batch)} Items parallel...")
+        
+        batch_results = await asyncio.gather(
+            *[smart_refresh_item(item) for item in batch],
+            return_exceptions=True
+        )
+        results.extend(batch_results)
+    
+    return results
+
 def get_library_names():
     try:
-        plex = PlexServer(PLEX_URL, PLEX_TOKEN, timeout=10)
+        plex = get_plex_connection()
         return [s.title for s in plex.library.sections() if s.type in ['movie', 'show']]
     except:
         return []
 
 # --- SCAN ENGINE ---
-async def run_scan_engine(progress_bar, log_callback, settings):
+async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None):
     init_db()
     log_callback("Starte Scan...")
     
     try:
-        plex = PlexServer(PLEX_URL, PLEX_TOKEN, timeout=PLEX_TIMEOUT)
+        plex = get_plex_connection()
     except Exception as e:
         log_callback(f"Verbindungsfehler: {e}")
         return None
@@ -152,17 +226,54 @@ async def run_scan_engine(progress_bar, log_callback, settings):
     dry_run = settings.get("dry_run", False)
     
     cutoff = dt.datetime.now() - dt.timedelta(days=days)
-
+    start_time = time.time()
+    
+    # Calculate total items for better ETA
+    all_items = []
+    total_items = 0
     for lib_name in target_libs:
-        log_callback(f"Analysiere: {lib_name}")
         try:
             lib = plex.library.section(lib_name)
             recent = lib.all(sort="addedAt:desc", limit=max_items)
-            total = len(recent)
+            all_items.append((lib_name, recent))
+            total_items += len(recent)
+        except Exception as e:
+            log_callback(f"Fehler beim Laden von {lib_name}: {e}")
 
-            for i, item in enumerate(recent):
+    items_processed = 0
+    for lib_name, items in all_items:
+        # Prüfe Abbruch-Flag
+        if cancel_flag and cancel_flag.get("cancelled", False):
+            log_callback("⚠️ Scan abgebrochen!")
+            break
+            
+        log_callback(f"Analysiere: {lib_name}")
+        try:
+            total = len(items)
+
+            for i, item in enumerate(items):
+                # Prüfe Abbruch-Flag
+                if cancel_flag and cancel_flag.get("cancelled", False):
+                    log_callback("⚠️ Scan abgebrochen!")
+                    break
+                    
                 if progress_bar:
-                    progress_bar.progress((i + 1) / total, text=f"{lib_name}: {item.title}")
+                    # Berechne geschätzte Restzeit basierend auf allen Items
+                    elapsed = time.time() - start_time
+                    if stats["checked"] > 0:
+                        avg_time_per_item = elapsed / stats["checked"]
+                        items_remaining = total_items - items_processed - 1
+                        eta_seconds = avg_time_per_item * items_remaining
+                        eta_str = f" (ETA: {int(eta_seconds)}s)"
+                    else:
+                        eta_str = ""
+                    
+                    progress_bar.progress(
+                        (items_processed + 1) / total_items, 
+                        text=f"{lib_name}: {item.title} ({items_processed+1}/{total_items}){eta_str}"
+                    )
+                
+                items_processed += 1
                 
                 if item.addedAt < cutoff:
                     continue
@@ -191,6 +302,11 @@ async def run_scan_engine(progress_bar, log_callback, settings):
             log_callback(f"Fehler in {lib_name}: {e}")
 
     log_callback("Fertig.")
+    
+    # Telegram-Benachrichtigung senden
+    if stats and stats.get("checked", 0) > 0:
+        notifications.send_scan_completion_notification(stats)
+    
     return stats
 
 # --- SCHEDULER ---
