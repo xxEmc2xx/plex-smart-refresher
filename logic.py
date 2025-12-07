@@ -139,7 +139,7 @@ def get_total_statistics():
     
     conn.close()
     
-    success_rate = (total_fixed / total_checked * 100) if total_checked > 0 else 0
+    success_rate = (total_fixed / (total_fixed + total_failed) * 100) if (total_fixed + total_failed) > 0 else 0
     
     return {
         "total_checked": total_checked,
@@ -332,3 +332,6 @@ def run_scheduler_thread():
         except Exception as e:
             logger.error(f"Scheduler Fehler: {e}")
             time.sleep(60)
+
+# Initialize database on module load to prevent "no such table" errors
+init_db()

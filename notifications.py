@@ -58,7 +58,7 @@ def send_scan_completion_notification(stats: Dict[str, int]) -> bool:
     failed = stats.get('failed', 0)
     
     # Erfolgsrate berechnen
-    success_rate = (fixed / checked * 100) if checked > 0 else 0
+    success_rate = (fixed / (fixed + failed) * 100) if (fixed + failed) > 0 else 0
     
     # Emoji basierend auf Erfolgsrate
     if success_rate >= 80:
