@@ -93,6 +93,9 @@ def init_db():
     conn.commit()
     conn.close()
 
+# Initialize database on module load to prevent "no such table" errors
+init_db()
+
 def save_result(rating_key, library, title, state, note):
     conn = sqlite3.connect(DB_PATH)
     now = dt.datetime.now().isoformat(timespec="seconds")
