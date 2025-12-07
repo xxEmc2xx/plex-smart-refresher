@@ -13,9 +13,15 @@ Ein ressourcenschonendes Python-Tool mit Web-Oberfläche, um fehlende Metadaten 
 * **Smart-Wait Logik:** Das Tool "feuert" nicht nur Befehle ab, sondern wartet geduldig (Polling bis zu 60s) und prüft, ob Plex die Metadaten wirklich geladen hat.
 * **Ressourcensparend:** Läuft nativ ("Bare Metal") auf Linux. Ersetzt schwere Docker-Container und verbraucht nur ca. 100 MB RAM.
 * **Web-Dashboard:** Moderne, dunkle Oberfläche (Dark Mode) mit goldenen Akzenten zur Steuerung.
+* **Tab-Navigation:** Übersichtliche Navigation mit Tabs für Dashboard, Statistiken und Einstellungen.
+* **Erfolgsrate-Anzeige:** Zeigt die Erfolgsrate der Scans mit farblicher Kennzeichnung (grün >80%, gelb >50%, rot <50%).
+* **Telegram Benachrichtigungen:** Optionale Push-Benachrichtigungen nach jedem Scan mit Statistiken.
+* **Suchfunktion:** Durchsuche die Historie nach Titeln und filtere nach Status.
 * **Zeitplaner:** Integrierter Scheduler für automatische Scans im Hintergrund (z.B. nachts).
 * **Intelligente Filter:** Scannt auf Wunsch nur Inhalte, die in den letzten X Tagen hinzugefügt wurden.
 * **Detaillierte Berichte:** Zeigt genau an, welcher Film gefixt wurde und speichert eine Historie.
+* **Performance-Optimierungen:** Caching, Connection Pooling und Lazy Loading für bessere Performance.
+* **Login-Sicherheit:** Begrenzung der Login-Versuche mit automatischer Sperrung.
 
 ---
 
@@ -27,6 +33,7 @@ Das Tool wird standardmäßig unter `/opt/plex_gui` installiert.
 | :--- | :--- |
 | `app.py` | Die grafische Oberfläche (Streamlit Dashboard). |
 | `logic.py` | Die Backend-Logik (Plex-Verbindung, Smart-Wait, Datenbank). |
+| `notifications.py` | Telegram-Benachrichtigungen (optional). |
 | `plexgui.service` | Konfiguration für den System-Autostart. |
 | `requirements.txt` | Liste der Python-Abhängigkeiten. |
 | `.env` | **WICHTIG** - Beinhaltet Passwörter und Tokens (wird lokal erstellt). |
@@ -114,6 +121,14 @@ PLEX_URL=http://localhost:32400
 PLEX_TOKEN=DEIN_ECHTER_PLEX_TOKEN
 PLEX_TIMEOUT=60
 GUI_PASSWORD=DEIN_GEWUENSCHTES_PASSWORT
+
+# Telegram Benachrichtigungen (optional)
+TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
+TELEGRAM_CHAT_ID=YOUR_CHAT_ID
+
+# Sicherheit: Login-Versuche begrenzen
+MAX_LOGIN_ATTEMPTS=5
+LOGIN_LOCKOUT_MINUTES=15
 ```
 *(Speichern mit STRG+O, Beenden mit STRG+X)*
 
@@ -141,12 +156,43 @@ sudo systemctl start plexgui
 Logge dich mit dem Passwort aus der `.env` Datei ein.
 
 ### Dashboard Funktionen
+* **Tab-Navigation:** Wechsle zwischen Dashboard, Statistiken und Einstellungen.
 * **Bibliotheken:** Wähle aus, welche Mediatheken gescannt werden.
 * **Zeit-Filter:** Begrenze den Scan auf neue Inhalte (spart Ressourcen).
 * **Simulation (Dry Run):** Teste den Scan, ohne Änderungen vorzunehmen.
+* **Erfolgsrate:** Zeigt die Erfolgsrate der Scans mit farblicher Kennzeichnung.
+* **Suchfunktion:** Durchsuche die Historie nach Titeln und filtere nach Status.
 * **Zeitplaner:** Aktiviere automatische Scans zu einer bestimmten Uhrzeit.
 * **Live Protokoll:** Verfolge den Scan in Echtzeit.
 * **Bericht:** Siehe dir die Historie aller gefixten Items an (Tabelle unten).
+
+---
+
+## 📱 Telegram Benachrichtigungen einrichten (Optional)
+
+Um Push-Benachrichtigungen nach jedem Scan zu erhalten, folge diesen Schritten:
+
+### 1. Telegram Bot erstellen
+1. Öffne Telegram und suche nach **@BotFather**
+2. Starte einen Chat und sende `/newbot`
+3. Folge den Anweisungen und wähle einen Namen für deinen Bot
+4. Du erhältst einen **Bot Token** (z.B. `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
+5. Kopiere diesen Token
+
+### 2. Chat-ID herausfinden
+1. Sende eine Nachricht an deinen neuen Bot
+2. Öffne im Browser: `https://api.telegram.org/bot<DEIN_BOT_TOKEN>/getUpdates`
+   (Ersetze `<DEIN_BOT_TOKEN>` mit deinem Token)
+3. Suche im JSON nach `"chat":{"id":` - die Zahl dahinter ist deine **Chat-ID** (z.B. `987654321`)
+
+### 3. In .env konfigurieren
+Füge die Werte in deine `.env` Datei ein:
+```ini
+TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+TELEGRAM_CHAT_ID=987654321
+```
+
+Nach einem Neustart des Services erhältst du nach jedem Scan eine Benachrichtigung mit Statistiken!
 
 ---
 
