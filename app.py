@@ -47,7 +47,7 @@ def check_login_lockout():
     """Prüfe ob Login gesperrt ist"""
     if st.session_state.lockout_until:
         if datetime.now() < st.session_state.lockout_until:
-            remaining = (st.session_state.lockout_until - datetime.now()).seconds // 60
+            remaining = int((st.session_state.lockout_until - datetime.now()).total_seconds() // 60)
             st.error(f"🔒 Login gesperrt. Versuche es in {remaining} Minuten erneut.")
             return False
         else:
@@ -237,8 +237,22 @@ def main():
         
         # Suchfilter
         col1, col2, col3 = st.columns([2, 1, 1])
-        search_title = col1.text_input("🔍 Titel suchen", placeholder="Suche nach Titel...")
-        status_filter = col2.selectbox("Status Filter", ["Alle", "Fixed", "Failed", "Dry Run"])
+        
+        # Check if filters changed and reset page
+        search_title = col1.text_input("🔍 Titel suchen", placeholder="Suche nach Titel...", key="search_title")
+        status_filter = col2.selectbox("Status Filter", ["Alle", "Fixed", "Failed", "Dry Run"], key="status_filter")
+        
+        # Reset page if filters changed
+        if "last_search" not in st.session_state:
+            st.session_state.last_search = ""
+        if "last_status" not in st.session_state:
+            st.session_state.last_status = "Alle"
+        
+        if (st.session_state.last_search != search_title or 
+            st.session_state.last_status != status_filter):
+            st.session_state.history_page = 0
+            st.session_state.last_search = search_title
+            st.session_state.last_status = status_filter
         
         # Pagination
         items_per_page = 20

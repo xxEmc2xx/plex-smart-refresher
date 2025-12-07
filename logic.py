@@ -217,8 +217,21 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
     
     cutoff = dt.datetime.now() - dt.timedelta(days=days)
     start_time = time.time()
-
+    
+    # Calculate total items for better ETA
+    all_items = []
+    total_items = 0
     for lib_name in target_libs:
+        try:
+            lib = plex.library.section(lib_name)
+            recent = lib.all(sort="addedAt:desc", limit=max_items)
+            all_items.append((lib_name, recent))
+            total_items += len(recent)
+        except Exception as e:
+            log_callback(f"Fehler beim Laden von {lib_name}: {e}")
+
+    items_processed = 0
+    for lib_name, items in all_items:
         # Prüfe Abbruch-Flag
         if cancel_flag and cancel_flag.get("cancelled", False):
             log_callback("⚠️ Scan abgebrochen!")
@@ -226,32 +239,31 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
             
         log_callback(f"Analysiere: {lib_name}")
         try:
-            lib = plex.library.section(lib_name)
-            recent = lib.all(sort="addedAt:desc", limit=max_items)
-            total = len(recent)
+            total = len(items)
 
-            for i, item in enumerate(recent):
+            for i, item in enumerate(items):
                 # Prüfe Abbruch-Flag
                 if cancel_flag and cancel_flag.get("cancelled", False):
                     log_callback("⚠️ Scan abgebrochen!")
                     break
                     
                 if progress_bar:
-                    # Berechne geschätzte Restzeit
+                    # Berechne geschätzte Restzeit basierend auf allen Items
                     elapsed = time.time() - start_time
-                    items_processed = stats["checked"]
-                    if items_processed > 0:
-                        avg_time_per_item = elapsed / items_processed
-                        items_remaining = (total - i - 1)
+                    if stats["checked"] > 0:
+                        avg_time_per_item = elapsed / stats["checked"]
+                        items_remaining = total_items - items_processed - 1
                         eta_seconds = avg_time_per_item * items_remaining
                         eta_str = f" (ETA: {int(eta_seconds)}s)"
                     else:
                         eta_str = ""
                     
                     progress_bar.progress(
-                        (i + 1) / total, 
-                        text=f"{lib_name}: {item.title} ({i+1}/{total}){eta_str}"
+                        (items_processed + 1) / total_items, 
+                        text=f"{lib_name}: {item.title} ({items_processed+1}/{total_items}){eta_str}"
                     )
+                
+                items_processed += 1
                 
                 if item.addedAt < cutoff:
                     continue

@@ -11,16 +11,16 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 def send_telegram_message(message: str) -> bool:
     """
-    Sendet eine Nachricht über Telegram Bot API.
+    Send a message via Telegram Bot API.
     
     Args:
-        message: Die zu sendende Nachricht
+        message: The message to send
         
     Returns:
-        True wenn erfolgreich gesendet, False bei Fehler
+        True if successfully sent, False on error
     """
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("⚠️ Telegram nicht konfiguriert (TELEGRAM_BOT_TOKEN oder TELEGRAM_CHAT_ID fehlt)")
+        print("⚠️ Telegram not configured (TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing)")
         return False
     
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -42,13 +42,13 @@ def send_telegram_message(message: str) -> bool:
 
 def send_scan_completion_notification(stats: Dict[str, int]) -> bool:
     """
-    Sendet eine Benachrichtigung nach Scan-Abschluss mit Statistiken.
+    Send a notification after scan completion with statistics.
     
     Args:
-        stats: Dictionary mit 'checked', 'fixed', 'failed' Werten
+        stats: Dictionary with 'checked', 'fixed', 'failed' values
         
     Returns:
-        True wenn erfolgreich gesendet, False bei Fehler
+        True if successfully sent, False on error
     """
     if not stats:
         return False
