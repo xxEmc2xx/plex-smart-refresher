@@ -1,4 +1,27 @@
-# Changelog - Plex Smart Refresher v2.0
+# Changelog - Plex Smart Refresher
+
+## v2.1.0 (Dezember 2025)
+
+### 🚀 Performance-Verbesserungen
+
+- **Batch-Refresh aktiviert**: Items werden parallel verarbeitet (5 gleichzeitig), 3-5x schnellere Scans
+- **Plex-Reconnect-Logik**: Automatischer Health-Check alle 5 Minuten, Reconnect bei verlorener Verbindung
+
+### 🛠️ Code-Qualität
+
+- **SQLite Context Manager**: Sauberes Connection-Handling mit automatischem Schließen
+- **Robusterer Scheduler**: 2-Minuten-Zeitfenster statt exaktem String-Vergleich, verpasst keine Scans mehr
+- **Logging vereinheitlicht**: print() durch logger ersetzt in notifications.py
+- **Cleanup**: Ungenutzten Code entfernt, ~896 statt ~940 Zeilen
+
+### 🚀 Upgrade
+
+```bash
+cd /opt/plex_gui && git pull origin main && sudo systemctl restart plexgui
+
+---
+
+## v2.0.0 (Dezember 2025)
 
 ## 🎉 Neue Features
 
