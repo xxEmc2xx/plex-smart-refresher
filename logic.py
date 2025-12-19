@@ -2,7 +2,7 @@ import os
 import asyncio
 import datetime as dt
 import sqlite3
-import gc
+
 import time
 import json
 import logging
@@ -33,20 +33,57 @@ SETTINGS_FILE = "settings.json"
 
 # Connection Pooling - Singleton Pattern
 _plex_connection = None
+_plex_last_check = None
 
 
-def get_plex_connection():
+def get_plex_connection(force_reconnect=False):
     """
     Globale Plex-Verbindung als Singleton mit Auto-Reconnect.
+    Prüft alle 5 Minuten ob die Verbindung noch lebt.
     """
-    global _plex_connection
-    if _plex_connection is None:
+    global _plex_connection, _plex_last_check
+    
+    now = time.time()
+    check_interval = 300  # 5 Minuten
+    
+    # Reconnect wenn erzwungen oder Verbindung zu alt
+    needs_reconnect = (
+        force_reconnect or
+        _plex_connection is None or
+        _plex_last_check is None or
+        (now - _plex_last_check) > check_interval
+    )
+    
+    if needs_reconnect:
+        # Verbindung testen oder neu aufbauen
+        if _plex_connection is not None:
+            try:
+                # Schneller Health-Check
+                _plex_connection.library.sections()
+                _plex_last_check = now
+                return _plex_connection
+            except Exception:
+                logger.warning("Plex-Verbindung verloren, versuche Reconnect...")
+                _plex_connection = None
+        
+        # Neue Verbindung aufbauen
         try:
             _plex_connection = PlexServer(PLEX_URL, PLEX_TOKEN, timeout=PLEX_TIMEOUT)
+            _plex_last_check = now
+            logger.info("Plex-Verbindung hergestellt")
         except Exception as e:
-            print(f"Fehler beim Herstellen der Plex-Verbindung: {e}")
+            logger.error(f"Fehler beim Herstellen der Plex-Verbindung: {e}")
+            _plex_connection = None
             raise
+    
     return _plex_connection
+
+
+def reset_plex_connection():
+    """Erzwingt einen Reconnect beim nächsten Aufruf."""
+    global _plex_connection, _plex_last_check
+    _plex_connection = None
+    _plex_last_check = None
 
 # --- SETTINGS ---
 def load_settings():
@@ -76,53 +113,65 @@ def save_settings(settings):
         logger.error(f"Error saving settings: {e}")
 
 # --- DATABASE ---
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS media_state(
-            rating_key TEXT PRIMARY KEY,
-            library TEXT,
-            title TEXT,
-            updated_at TEXT,
-            state TEXT,
-            note TEXT,
-            last_scan TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+from contextlib import contextmanager
 
-# Initialize database on module load to prevent "no such table" errors
-init_db()
 
-def save_result(rating_key, library, title, state, note):
-    conn = sqlite3.connect(DB_PATH)
-    now = dt.datetime.now().isoformat(timespec="seconds")
-    conn.execute("""
-        INSERT INTO media_state(rating_key, library, title, updated_at, state, note, last_scan)
-        VALUES(?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(rating_key) DO UPDATE SET
-            library=excluded.library,
-            title=excluded.title,
-            updated_at=excluded.updated_at,
-            state=excluded.state,
-            note=excluded.note,
-            last_scan=excluded.last_scan
-    """, (rating_key, library, title, now, state, note, now))
-    conn.commit()
-    conn.close()
-
-def get_last_report(limit=100, only_fixed=False):
+@contextmanager
+def get_db_connection():
+    """Context Manager für saubere DB-Verbindungen."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    query = "SELECT * FROM media_state"
-    if only_fixed:
-        query += " WHERE state='fixed'"
-    query += " ORDER BY last_scan DESC LIMIT ?"
-    rows = conn.execute(query, (limit,)).fetchall()
-    conn.close()
-    return rows
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def init_db():
+    with get_db_connection() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS media_state(
+                rating_key TEXT PRIMARY KEY,
+                library TEXT,
+                title TEXT,
+                updated_at TEXT,
+                state TEXT,
+                note TEXT,
+                last_scan TEXT
+            )
+        """)
+        conn.commit()
+
+
+# Initialize database on module load
+init_db()
+
+
+def save_result(rating_key, library, title, state, note):
+    with get_db_connection() as conn:
+        now = dt.datetime.now().isoformat(timespec="seconds")
+        conn.execute("""
+            INSERT INTO media_state(rating_key, library, title, updated_at, state, note, last_scan)
+            VALUES(?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(rating_key) DO UPDATE SET
+                library=excluded.library,
+                title=excluded.title,
+                updated_at=excluded.updated_at,
+                state=excluded.state,
+                note=excluded.note,
+                last_scan=excluded.last_scan
+        """, (rating_key, library, title, now, state, note, now))
+        conn.commit()
+
+
+def get_last_report(limit=100, only_fixed=False):
+    with get_db_connection() as conn:
+        query = "SELECT * FROM media_state"
+        if only_fixed:
+            query += " WHERE state='fixed'"
+        query += " ORDER BY last_scan DESC LIMIT ?"
+        rows = conn.execute(query, (limit,)).fetchall()
+        return rows
 
 
 def get_total_statistics():
@@ -132,15 +181,11 @@ def get_total_statistics():
     Returns:
         Dictionary mit total_checked, total_fixed, total_failed, success_rate
     """
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    
-    # Zähle alle Einträge
-    total_checked = c.execute("SELECT COUNT(*) FROM media_state").fetchone()[0]
-    total_fixed = c.execute("SELECT COUNT(*) FROM media_state WHERE state='fixed'").fetchone()[0]
-    total_failed = c.execute("SELECT COUNT(*) FROM media_state WHERE state='failed'").fetchone()[0]
-    
-    conn.close()
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        total_checked = c.execute("SELECT COUNT(*) FROM media_state").fetchone()[0]
+        total_fixed = c.execute("SELECT COUNT(*) FROM media_state WHERE state='fixed'").fetchone()[0]
+        total_failed = c.execute("SELECT COUNT(*) FROM media_state WHERE state='failed'").fetchone()[0]
     
     success_rate = (total_fixed / (total_fixed + total_failed) * 100) if (total_fixed + total_failed) > 0 else 0
     
@@ -176,34 +221,6 @@ async def smart_refresh_item(item, status_callback=None) -> Tuple[bool, str]:
     return False, "Timeout (60s)"
 
 
-async def batch_refresh_items(items, batch_size=5, log_callback=None):
-    """
-    Mehrere Items parallel refreshen mit asyncio.gather für bessere Performance.
-    
-    Args:
-        items: Liste von Items zum Refreshen
-        batch_size: Anzahl gleichzeitiger Refresh-Operationen
-        log_callback: Optional callback für Logging
-        
-    Returns:
-        Liste von Tuples (success, message) für jedes Item
-    """
-    results = []
-    total_items = len(items)
-    
-    for i in range(0, total_items, batch_size):
-        batch = items[i:i+batch_size]
-        if log_callback:
-            log_callback(f"Batch {i//batch_size + 1}: Verarbeite {len(batch)} Items parallel...")
-        
-        batch_results = await asyncio.gather(
-            *[smart_refresh_item(item) for item in batch],
-            return_exceptions=True
-        )
-        results.extend(batch_results)
-    
-    return results
-
 def get_library_names():
     try:
         plex = get_plex_connection()
@@ -227,93 +244,121 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
     max_items = settings.get("max_items", 50)
     target_libs = settings.get("libraries", [])
     dry_run = settings.get("dry_run", False)
+    batch_size = settings.get("batch_size", 5)
     
     cutoff = dt.datetime.now() - dt.timedelta(days=days)
     start_time = time.time()
     
-    # Calculate total items for better ETA
+    # Phase 1: Alle Items sammeln
+    log_callback("Phase 1: Sammle Items...")
     all_items = []
-    total_items = 0
+    items_to_refresh = []
+    
     for lib_name in target_libs:
+        if cancel_flag and cancel_flag.get("cancelled", False):
+            break
         try:
             lib = plex.library.section(lib_name)
             recent = lib.all(sort="addedAt:desc", limit=max_items)
             all_items.append((lib_name, recent))
-            total_items += len(recent)
         except Exception as e:
             log_callback(f"Fehler beim Laden von {lib_name}: {e}")
 
+    # Phase 2: Items analysieren
+    log_callback("Phase 2: Analysiere Items...")
+    total_items = sum(len(items) for _, items in all_items)
     items_processed = 0
+    
     for lib_name, items in all_items:
-        # Prüfe Abbruch-Flag
         if cancel_flag and cancel_flag.get("cancelled", False):
             log_callback("⚠️ Scan abgebrochen!")
             break
             
         log_callback(f"Analysiere: {lib_name}")
-        try:
-            total = len(items)
-
-            for i, item in enumerate(items):
-                # Prüfe Abbruch-Flag
-                if cancel_flag and cancel_flag.get("cancelled", False):
-                    log_callback("⚠️ Scan abgebrochen!")
-                    break
-                    
-                if progress_bar:
-                    # Berechne geschätzte Restzeit basierend auf allen Items
-                    elapsed = time.time() - start_time
-                    if stats["checked"] > 0:
-                        avg_time_per_item = elapsed / stats["checked"]
-                        items_remaining = total_items - items_processed - 1
-                        eta_seconds = avg_time_per_item * items_remaining
-                        eta_str = f" (ETA: {int(eta_seconds)}s)"
-                    else:
-                        eta_str = ""
-                    
-                    progress_bar.progress(
-                        (items_processed + 1) / total_items, 
-                        text=f"{lib_name}: {item.title} ({items_processed+1}/{total_items}){eta_str}"
-                    )
+        
+        for item in items:
+            if cancel_flag and cancel_flag.get("cancelled", False):
+                break
                 
-                items_processed += 1
-                
-                if item.addedAt < cutoff:
-                    continue
-                
-                stats["checked"] += 1
-                
-                if needs_refresh(item):
-                    if dry_run:
-                        log_callback(f"-> [SIM] Würde fixen: {item.title}")
-                        save_result(item.ratingKey, lib_name, item.title, "dry_run", "Simulation")
+            items_processed += 1
+            
+            if progress_bar:
+                progress_bar.progress(
+                    items_processed / total_items * 0.3,
+                    text=f"Analysiere: {item.title} ({items_processed}/{total_items})"
+                )
+            
+            if item.addedAt < cutoff:
+                continue
+            
+            stats["checked"] += 1
+            
+            if needs_refresh(item):
+                if dry_run:
+                    log_callback(f"-> [SIM] Würde fixen: {item.title}")
+                    save_result(item.ratingKey, lib_name, item.title, "dry_run", "Simulation")
+                    stats["fixed"] += 1
+                else:
+                    items_to_refresh.append((item, lib_name))
+    
+    # Phase 3: Batch-Verarbeitung
+    if items_to_refresh and not dry_run:
+        total_to_fix = len(items_to_refresh)
+        log_callback(f"Phase 3: Fixe {total_to_fix} Items in Batches von {batch_size}...")
+        
+        for i in range(0, total_to_fix, batch_size):
+            if cancel_flag and cancel_flag.get("cancelled", False):
+                log_callback("⚠️ Scan abgebrochen!")
+                break
+            
+            batch = items_to_refresh[i:i+batch_size]
+            batch_num = i // batch_size + 1
+            total_batches = (total_to_fix + batch_size - 1) // batch_size
+            
+            log_callback(f"Batch {batch_num}/{total_batches}: {len(batch)} Items parallel...")
+            
+            if progress_bar:
+                progress_bar.progress(
+                    0.3 + (i / total_to_fix * 0.7),
+                    text=f"Batch {batch_num}/{total_batches}"
+                )
+            
+            tasks = [smart_refresh_item(item) for item, _ in batch]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            for (item, lib_name), result in zip(batch, results):
+                if isinstance(result, Exception):
+                    log_callback(f"❌ {item.title}: {str(result)}")
+                    save_result(item.ratingKey, lib_name, item.title, "failed", str(result))
+                    stats["failed"] += 1
+                else:
+                    ok, msg = result
+                    if ok:
+                        log_callback(f"✅ {item.title}: {msg}")
+                        save_result(item.ratingKey, lib_name, item.title, "fixed", msg)
                         stats["fixed"] += 1
                     else:
-                        log_callback(f"-> Fixe: {item.title}...")
-                        ok, msg = await smart_refresh_item(item)
-                        if ok:
-                            log_callback(f"✅ {item.title}: {msg}")
-                            save_result(item.ratingKey, lib_name, item.title, "fixed", msg)
-                            stats["fixed"] += 1
-                        else:
-                            log_callback(f"❌ {item.title}: {msg}")
-                            save_result(item.ratingKey, lib_name, item.title, "failed", msg)
-                            stats["failed"] += 1
-                del item
-            gc.collect()
-        except Exception as e:
-            log_callback(f"Fehler in {lib_name}: {e}")
+                        log_callback(f"❌ {item.title}: {msg}")
+                        save_result(item.ratingKey, lib_name, item.title, "failed", msg)
+                        stats["failed"] += 1
 
+    if progress_bar:
+        progress_bar.progress(1.0, text="Fertig!")
+    
     log_callback("Fertig.")
     
-    # Telegram-Benachrichtigung senden
     if stats and stats.get("checked", 0) > 0:
         notifications.send_scan_completion_notification(stats)
     
     return stats
 
+
 # --- SCHEDULER ---
 def run_scheduler_thread():
+    """
+    Hintergrund-Scheduler mit robusterem Zeitfenster-Check.
+    Prüft alle 30 Sekunden und verwendet ein 2-Minuten-Fenster.
+    """
     logger.info("⏰ Hintergrund-Scheduler gestartet.")
     last_run_date = None
 
@@ -323,18 +368,38 @@ def run_scheduler_thread():
             if settings.get("schedule_active"):
                 target_time_str = settings.get("schedule_time", "04:00")
                 now = dt.datetime.now()
-                current_time_str = now.strftime("%H:%M")
                 current_date_str = now.strftime("%Y-%m-%d")
-
-                if current_time_str == target_time_str and last_run_date != current_date_str:
-                    logger.info(f"⏰ ZEITPLAN AUSLÖSUNG: {current_time_str}")
-                    def dummy_log(msg): logger.info(f"[AUTO-SCAN] {msg}")
-                    asyncio.run(run_scan_engine(None, dummy_log, settings))
-                    last_run_date = current_date_str
-            time.sleep(59)
+                
+                # Parse target time
+                try:
+                    target_hour, target_minute = map(int, target_time_str.split(":"))
+                    target_time = now.replace(hour=target_hour, minute=target_minute, second=0, microsecond=0)
+                except ValueError:
+                    logger.error(f"Ungültiges Zeitformat: {target_time_str}")
+                    time.sleep(60)
+                    continue
+                
+                # Zeitfenster-Check: 2 Minuten Toleranz
+                time_diff = abs((now - target_time).total_seconds())
+                in_window = time_diff <= 120  # 2 Minuten Fenster
+                
+                if in_window and last_run_date != current_date_str:
+                    logger.info(f"⏰ ZEITPLAN AUSLÖSUNG: {now.strftime('%H:%M:%S')}")
+                    
+                    def dummy_log(msg): 
+                        logger.info(f"[AUTO-SCAN] {msg}")
+                    
+                    try:
+                        asyncio.run(run_scan_engine(None, dummy_log, settings))
+                        last_run_date = current_date_str
+                        logger.info("⏰ Geplanter Scan abgeschlossen.")
+                    except Exception as scan_error:
+                        logger.error(f"Fehler beim geplanten Scan: {scan_error}")
+                        # Trotzdem als gelaufen markieren um Endlosschleife zu vermeiden
+                        last_run_date = current_date_str
+                        
+            time.sleep(30)  # Alle 30 Sekunden prüfen statt 59
         except Exception as e:
             logger.error(f"Scheduler Fehler: {e}")
             time.sleep(60)
 
-# Initialize database on module load to prevent "no such table" errors
-init_db()
