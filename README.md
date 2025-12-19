@@ -195,6 +195,14 @@ TELEGRAM_CHAT_ID=987654321
 Nach einem Neustart des Services erhältst du nach jedem Scan eine Benachrichtigung mit Statistiken!
 
 ---
+## 🔄 Update von GitHub
+
+**Auf neue Version aktualisieren:**
+```bash
+cd /opt/plex_gui
+git pull origin main
+sudo systemctl restart plexgui
+
 
 ## ❓ Wartung & Befehle
 
