@@ -301,46 +301,33 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
                 else:
                     items_to_refresh.append((item, lib_name))
     
-    # Phase 3: Batch-Verarbeitung
+    # Phase 3: Sequentielle Verarbeitung
     if items_to_refresh and not dry_run:
         total_to_fix = len(items_to_refresh)
-        log_callback(f"Phase 3: Fixe {total_to_fix} Items in Batches von {batch_size}...")
+        log_callback(f"Phase 3: Fixe {total_to_fix} Items...")
         
-        for i in range(0, total_to_fix, batch_size):
+        for idx, (item, lib_name) in enumerate(items_to_refresh):
             if cancel_flag and cancel_flag.get("cancelled", False):
                 log_callback("⚠️ Scan abgebrochen!")
                 break
             
-            batch = items_to_refresh[i:i+batch_size]
-            batch_num = i // batch_size + 1
-            total_batches = (total_to_fix + batch_size - 1) // batch_size
-            
-            log_callback(f"Batch {batch_num}/{total_batches}: {len(batch)} Items parallel...")
+            log_callback(f"-> Fixe ({idx+1}/{total_to_fix}): {item.title}...")
             
             if progress_bar:
                 progress_bar.progress(
-                    0.3 + (i / total_to_fix * 0.7),
-                    text=f"Batch {batch_num}/{total_batches}"
+                    0.3 + ((idx + 1) / total_to_fix * 0.7),
+                    text=f"Fixe {idx+1}/{total_to_fix}: {item.title}"
                 )
             
-            tasks = [smart_refresh_item(item) for item, _ in batch]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            
-            for (item, lib_name), result in zip(batch, results):
-                if isinstance(result, Exception):
-                    log_callback(f"❌ {item.title}: {str(result)}")
-                    save_result(item.ratingKey, lib_name, item.title, "failed", str(result))
-                    stats["failed"] += 1
-                else:
-                    ok, msg = result
-                    if ok:
-                        log_callback(f"✅ {item.title}: {msg}")
-                        save_result(item.ratingKey, lib_name, item.title, "fixed", msg)
-                        stats["fixed"] += 1
-                    else:
-                        log_callback(f"❌ {item.title}: {msg}")
-                        save_result(item.ratingKey, lib_name, item.title, "failed", msg)
-                        stats["failed"] += 1
+            ok, msg = await smart_refresh_item(item)
+            if ok:
+                log_callback(f"✅ {item.title}: {msg}")
+                save_result(item.ratingKey, lib_name, item.title, "fixed", msg)
+                stats["fixed"] += 1
+            else:
+                log_callback(f"❌ {item.title}: {msg}")
+                save_result(item.ratingKey, lib_name, item.title, "failed", msg)
+                stats["failed"] += 1
 
     if progress_bar:
         progress_bar.progress(1.0, text="Fertig!")
@@ -351,7 +338,6 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
         notifications.send_scan_completion_notification(stats)
     
     return stats
-
 
 # --- SCHEDULER ---
 def run_scheduler_thread():
