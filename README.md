@@ -1,222 +1,142 @@
-# 📘 System-Dokumentation: Plex Smart Refresher (GUI Edition)
+# Plex Smart Refresher
 
-![Status](https://img.shields.io/badge/Status-Stable-green)
-![Version](https://img.shields.io/badge/Version-1.0-blue)
-![System](https://img.shields.io/badge/OS-Debian%2012-red)
+Ressourcenschonendes Python-Tool mit Web-GUI zur automatischen Reparatur fehlender Plex-Metadaten (Poster, Match-IDs, Beschreibungen).
 
-Ein ressourcenschonendes Python-Tool mit Web-Oberfläche, um fehlende Metadaten in Plex (fehlende Poster, keine Match-ID, unvollständige Infos) zu erkennen und intelligent zu reparieren.
+## Features
 
----
+- **Smart-Wait Logik**: Wartet bis zu 60s und prüft, ob Plex Metadaten wirklich geladen hat
+- **Web-Dashboard**: Moderne Dark-Mode GUI mit Tab-Navigation (Dashboard, Statistik, Einstellungen)
+- **Zeitplaner**: Automatische Scans im Hintergrund (z.B. nachts)
+- **Telegram-Benachrichtigungen**: Optionale Push-Notifications nach jedem Scan
+- **Erfolgsrate-Anzeige**: Farbcodiert (grün >80%, gelb >50%, rot <50%)
+- **Suchfunktion**: Historie nach Titeln durchsuchen, Status-Filter
+- **Login-Sicherheit**: Max. 5 Versuche, automatische Sperrung
+- **Intelligente Filter**: Nur neue Inhalte der letzten X Tage scannen
+- **Performance-Optimiert**: Caching, Connection Pooling, Lazy Loading
+- **Ressourcensparend**: ~100 MB RAM, läuft nativ ohne Docker
 
-## ✨ Features
+## Installation
 
-* **Smart-Wait Logik:** Das Tool "feuert" nicht nur Befehle ab, sondern wartet geduldig (Polling bis zu 60s) und prüft, ob Plex die Metadaten wirklich geladen hat.
-* **Ressourcensparend:** Läuft nativ ("Bare Metal") auf Linux. Ersetzt schwere Docker-Container und verbraucht nur ca. 100 MB RAM.
-* **Web-Dashboard:** Moderne, dunkle Oberfläche (Dark Mode) mit goldenen Akzenten zur Steuerung.
-* **Tab-Navigation:** Übersichtliche Navigation mit Tabs für Dashboard, Statistiken und Einstellungen.
-* **Erfolgsrate-Anzeige:** Zeigt die Erfolgsrate der Scans mit farblicher Kennzeichnung (grün >80%, gelb >50%, rot <50%).
-* **Telegram Benachrichtigungen:** Optionale Push-Benachrichtigungen nach jedem Scan mit Statistiken.
-* **Suchfunktion:** Durchsuche die Historie nach Titeln und filtere nach Status.
-* **Zeitplaner:** Integrierter Scheduler für automatische Scans im Hintergrund (z.B. nachts).
-* **Intelligente Filter:** Scannt auf Wunsch nur Inhalte, die in den letzten X Tagen hinzugefügt wurden.
-* **Detaillierte Berichte:** Zeigt genau an, welcher Film gefixt wurde und speichert eine Historie.
-* **Performance-Optimierungen:** Caching, Connection Pooling und Lazy Loading für bessere Performance.
-* **Login-Sicherheit:** Begrenzung der Login-Versuche mit automatischer Sperrung.
+### Voraussetzungen
+- Debian 12 (oder kompatible Linux-Distribution)
+- Python 3.11+
+- Plex Media Server mit gültigem Token
 
----
-
-## 📂 Projektstruktur
-
-Das Tool wird standardmäßig unter `/opt/plex_gui` installiert.
-
-| Datei | Beschreibung |
-| :--- | :--- |
-| `app.py` | Die grafische Oberfläche (Streamlit Dashboard). |
-| `logic.py` | Die Backend-Logik (Plex-Verbindung, Smart-Wait, Datenbank). |
-| `notifications.py` | Telegram-Benachrichtigungen (optional). |
-| `plexgui.service` | Konfiguration für den System-Autostart. |
-| `requirements.txt` | Liste der Python-Abhängigkeiten. |
-| `.env` | **WICHTIG** - Beinhaltet Passwörter und Tokens (wird lokal erstellt). |
-| `settings.json` | Speichert automatisch die Einstellungen aus der GUI. |
-| `refresh_state.db` | Lokale SQLite-Datenbank für die Historie. |
-
----
-
-## 🛠️ Installationsanleitung
-
-Diese Schritte gelten für ein frisches **Debian 12 System (VPS)**.
-
-### 1. Voraussetzungen installieren
-Führen Sie folgende Befehle aus, um Python und Pip zu installieren:
-
+### Setup
 ```bash
-sudo apt update
-sudo apt install -y python3-venv python3-pip
-```
+# 1. Python und Pip installieren
+sudo apt update && sudo apt install -y python3-venv python3-pip
 
-### 2. Verzeichnis erstellen & Dateien anlegen
-Wir erstellen den Zielordner und legen die Skripte manuell an.
-
-**A. Ordner erstellen:**
-```bash
-mkdir -p /opt/plex_gui
+# 2. Verzeichnis erstellen
+sudo mkdir -p /opt/plex_gui
 cd /opt/plex_gui
-```
 
-**B. Dateien erstellen:**
-Kopieren Sie den jeweiligen Quellcode (aus Ihrem Backup oder GitHub) und fügen Sie ihn in die Dateien ein.
+# 3. Code herunterladen (Option A: Git)
+git clone https://github.com/DEIN-REPO/plex_gui.git .
 
-*Datei 1: Die Benutzeroberfläche*
-```bash
-nano app.py
-# [Hier den Inhalt von app.py einfügen]
-# Speichern: STRG+O -> Enter -> STRG+X
-```
+# Oder Option B: Manuell Dateien erstellen
+# app.py, logic.py, notifications.py, requirements.txt, plexgui.service
 
-*Datei 2: Die Logik*
-```bash
-nano logic.py
-# [Hier den Inhalt von logic.py einfügen]
-# Speichern: STRG+O -> Enter -> STRG+X
-```
-
-*Datei 3: Die Abhängigkeiten*
-```bash
-nano requirements.txt
-# [Inhalt einfügen:]
-# streamlit
-# plexapi
-# python-dotenv
-# requests
-# pandas
-# Speichern: STRG+O -> Enter -> STRG+X
-```
-
-*Datei 4: Der Autostart-Dienst*
-```bash
-nano plexgui.service
-# [Hier den Inhalt der .service Datei einfügen]
-# Speichern: STRG+O -> Enter -> STRG+X
-```
-
-### 3. Virtuelle Umgebung (Venv) einrichten
-Wir installieren die benötigten Pakete isoliert:
-
-```bash
+# 4. Virtuelle Umgebung einrichten
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Konfiguration (.env)
-Erstelle eine Datei namens `.env`. Diese Datei enthält sensible Daten und darf nicht öffentlich geteilt werden.
+## Konfiguration
 
-```bash
-nano .env
-```
+Erstelle `.env` Datei in `/opt/plex_gui`:
 
-**Inhalt:**
 ```ini
+# Plex Server
 PLEX_URL=http://localhost:32400
-PLEX_TOKEN=DEIN_ECHTER_PLEX_TOKEN
+PLEX_TOKEN=DEIN_PLEX_TOKEN
 PLEX_TIMEOUT=60
-GUI_PASSWORD=DEIN_GEWUENSCHTES_PASSWORT
 
-# Telegram Benachrichtigungen (optional)
+# GUI Passwort
+GUI_PASSWORD=DEIN_PASSWORT
+
+# Telegram (optional)
 TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
 TELEGRAM_CHAT_ID=YOUR_CHAT_ID
 
-# Sicherheit: Login-Versuche begrenzen
+# Sicherheit
 MAX_LOGIN_ATTEMPTS=5
 LOGIN_LOCKOUT_MINUTES=15
 ```
-*(Speichern mit STRG+O, Beenden mit STRG+X)*
 
-### 5. Autostart einrichten (Systemd)
-Damit das Tool immer läuft (24/7) und automatisch startet:
+**Plex Token finden**: `Settings > Network > Show Advanced > Plex.tv Token`
 
-Kopiere die Service-Datei an den System-Ort:
+### Autostart aktivieren
 ```bash
 sudo cp plexgui.service /etc/systemd/system/
-```
-
-Aktiviere den Dienst:
-```bash
 sudo systemctl daemon-reload
 sudo systemctl enable plexgui
 sudo systemctl start plexgui
 ```
-*(Hinweis: Der Service-Befehl erzwingt den Dark Mode und die Akzentfarbe).*
 
----
+## Bedienung
 
-## 🖥️ Bedienung
+Browser öffnen: `http://DEINE-SERVER-IP:8501`
 
-Öffne deinen Browser: `http://DEINE-SERVER-IP:8501`  
-Logge dich mit dem Passwort aus der `.env` Datei ein.
+- **Dashboard**: Bibliotheken auswählen, Zeit-Filter setzen, Scan starten
+- **Statistik**: Erfolgsrate, Historie mit Suchfunktion
+- **Einstellungen**: Zeitplaner, Dry Run, Telegram
 
-### Dashboard Funktionen
-* **Tab-Navigation:** Wechsle zwischen Dashboard, Statistiken und Einstellungen.
-* **Bibliotheken:** Wähle aus, welche Mediatheken gescannt werden.
-* **Zeit-Filter:** Begrenze den Scan auf neue Inhalte (spart Ressourcen).
-* **Simulation (Dry Run):** Teste den Scan, ohne Änderungen vorzunehmen.
-* **Erfolgsrate:** Zeigt die Erfolgsrate der Scans mit farblicher Kennzeichnung.
-* **Suchfunktion:** Durchsuche die Historie nach Titeln und filtere nach Status.
-* **Zeitplaner:** Aktiviere automatische Scans zu einer bestimmten Uhrzeit.
-* **Live Protokoll:** Verfolge den Scan in Echtzeit.
-* **Bericht:** Siehe dir die Historie aller gefixten Items an (Tabelle unten).
+## Update-Anleitung
 
----
-
-## 📱 Telegram Benachrichtigungen einrichten (Optional)
-
-Um Push-Benachrichtigungen nach jedem Scan zu erhalten, folge diesen Schritten:
-
-### 1. Telegram Bot erstellen
-1. Öffne Telegram und suche nach **@BotFather**
-2. Starte einen Chat und sende `/newbot`
-3. Folge den Anweisungen und wähle einen Namen für deinen Bot
-4. Du erhältst einen **Bot Token** (z.B. `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
-5. Kopiere diesen Token
-
-### 2. Chat-ID herausfinden
-1. Sende eine Nachricht an deinen neuen Bot
-2. Öffne im Browser: `https://api.telegram.org/bot<DEIN_BOT_TOKEN>/getUpdates`
-   (Ersetze `<DEIN_BOT_TOKEN>` mit deinem Token)
-3. Suche im JSON nach `"chat":{"id":` - die Zahl dahinter ist deine **Chat-ID** (z.B. `987654321`)
-
-### 3. In .env konfigurieren
-Füge die Werte in deine `.env` Datei ein:
-```ini
-TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
-TELEGRAM_CHAT_ID=987654321
-```
-
-Nach einem Neustart des Services erhältst du nach jedem Scan eine Benachrichtigung mit Statistiken!
-
----
-## 🔄 Update von GitHub
-
-**Auf neue Version aktualisieren:**
+### Variante 1: Git Pull (wenn ursprünglich gecloned)
 ```bash
 cd /opt/plex_gui
 git pull origin main
 sudo systemctl restart plexgui
+```
 
-
-## ❓ Wartung & Befehle
-
-**Status prüfen (RAM Verbrauch & Laufzeit):**
+### Variante 2: Git Init (nachträglich Git nutzen)
 ```bash
+cd /opt/plex_gui
+git init
+git remote add origin https://github.com/DEIN-REPO/plex_gui.git
+git fetch
+git reset --hard origin/main
+sudo systemctl restart plexgui
+```
+
+### Variante 3: Wget (einzelne Dateien)
+```bash
+cd /opt/plex_gui
+wget -O app.py https://raw.githubusercontent.com/DEIN-REPO/plex_gui/main/app.py
+wget -O logic.py https://raw.githubusercontent.com/DEIN-REPO/plex_gui/main/logic.py
+wget -O notifications.py https://raw.githubusercontent.com/DEIN-REPO/plex_gui/main/notifications.py
+source venv/bin/activate && pip install -r requirements.txt
+sudo systemctl restart plexgui
+```
+
+## Wartungsbefehle
+
+```bash
+# Status prüfen (RAM, Laufzeit)
 systemctl status plexgui
-```
 
-**Logs live ansehen (Fehlersuche):**
-```bash
+# Logs live ansehen
 journalctl -u plexgui -f
+
+# Service neu starten
+sudo systemctl restart plexgui
+
+# Service stoppen
+sudo systemctl stop plexgui
 ```
 
-**Tool neu starten (nach Updates oder Config-Änderung):**
-```bash
-systemctl restart plexgui
-```
+## Projektstruktur
+
+| Datei | Beschreibung |
+|-------|-------------|
+| `app.py` | Web-Dashboard (Streamlit) |
+| `logic.py` | Backend-Logik (Plex-API, Datenbank) |
+| `notifications.py` | Telegram-Integration |
+| `plexgui.service` | Systemd-Service für Autostart |
+| `requirements.txt` | Python-Abhängigkeiten |
+| `.env` | Konfiguration (nicht committen!) |
+| `settings.json` | GUI-Einstellungen (automatisch) |
+| `refresh_state.db` | SQLite-Datenbank (Historie) |

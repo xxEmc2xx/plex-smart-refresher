@@ -1,112 +1,40 @@
-# Changelog - Plex Smart Refresher
+# Changelog
+
+## v2.1.1 (Dezember 2025)
+
+### Bugfixes
+- **Encoding-Fix**: Sonderzeichen in Titeln führen nicht mehr zum Crash
+- **Robuste Fehlerbehandlung**: Try/Except pro Item, ein defekter Eintrag stoppt nicht den gesamten Scan
+- **Notification Restore**: Benachrichtigungen werden nach Absturz wiederhergestellt
+- **Endlosschleifen verhindert**: Defekte Dateien brechen Verarbeitung nicht mehr ab
 
 ## v2.1.0 (Dezember 2025)
 
-### 🚀 Performance-Verbesserungen
-
-- **Batch-Refresh aktiviert**: Items werden parallel verarbeitet (5 gleichzeitig), 3-5x schnellere Scans
+### Performance & Stabilität
+- **Batch-Refresh**: Zurückgerollt auf sequentielle Verarbeitung (asyncio.gather blockierte)
 - **Plex-Reconnect-Logik**: Automatischer Health-Check alle 5 Minuten, Reconnect bei verlorener Verbindung
-
-### 🛠️ Code-Qualität
-
 - **SQLite Context Manager**: Sauberes Connection-Handling mit automatischem Schließen
-- **Robusterer Scheduler**: 2-Minuten-Zeitfenster statt exaktem String-Vergleich, verpasst keine Scans mehr
-- **Logging vereinheitlicht**: print() durch logger ersetzt in notifications.py
-- **Cleanup**: Ungenutzten Code entfernt, ~896 statt ~940 Zeilen
+- **Robusterer Scheduler**: 2-Minuten-Zeitfenster statt exaktem String-Vergleich
 
-### 🚀 Upgrade
-
-```bash
-cd /opt/plex_gui && git pull origin main && sudo systemctl restart plexgui
-
----
+### Code-Qualität
+- Logging vereinheitlicht (print() durch logger ersetzt)
+- Cleanup ungenutzter Code
 
 ## v2.0.0 (Dezember 2025)
 
-## 🎉 Neue Features
+### Features
+- **Telegram-Benachrichtigungen**: Push-Notifications nach jedem Scan mit Statistiken
+- **Erfolgsrate-Anzeige**: Farbcodiert (grün >80%, gelb >50%, rot <50%)
+- **GUI mit Tabs**: Dashboard, Statistik, Einstellungen
+- **Login-Sicherheit**: Max. 5 Versuche, 15 Min. Sperrzeit
+- **Suchfunktion**: Historie nach Titeln durchsuchen, Status-Filter
 
-### 1. 📱 Telegram Benachrichtigungen
-- Automatische Push-Benachrichtigungen nach jedem Scan
-- Statistiken werden direkt an Telegram gesendet
-- Farbcodierte Erfolgsrate in Nachrichten
-- Optional - funktioniert auch ohne Telegram-Konfiguration
-
-### 2. 📊 Erfolgsrate-Anzeige
-- Neue vierte Metrik zeigt Erfolgsrate an
-- Farbcodierung: Grün (>80%), Gelb (>50%), Rot (<50%)
-- Gesamtstatistiken über alle Scans
-- Erfolgsrate im Dashboard und Statistik-Tab
-
-### 3. 🎨 GUI-Optimierungen mit Tabs
-- **Dashboard-Tab**: Scan-Steuerung, Metriken, Live-Protokoll
-- **Statistik-Tab**: Detaillierte Statistiken und Historie mit Suchfunktion
-- **Einstellungen-Tab**: Alle Konfigurationen an einem Ort
-
-### 4. 🔍 Erweiterte Historie-Verwaltung
-- Textsuche nach Titeln
-- Status-Filter (Alle, Fixed, Failed, Dry Run)
+### Performance
+- Connection Pooling (Singleton-Pattern für Plex)
+- Caching (5 Min. Bibliotheken, 1 Min. Statistiken)
 - Pagination (20 Einträge pro Seite)
-- "Mehr laden" Funktionalität
 
-### 5. ⚡ Performance-Optimierungen
-- **Connection Pooling**: Singleton-Pattern für Plex-Verbindung
-- **Caching**: 5 Minuten Cache für Bibliotheksnamen, 1 Minute für Statistiken
-- **Batch Processing**: Vorbereitet für parallele Item-Verarbeitung
-- **Lazy Loading**: Pagination für Historie reduziert Speicherverbrauch
-
-### 6. 🔐 Sicherheits-Features
-- Begrenzung der Login-Versuche (Standard: 5 Versuche)
-- Automatische Sperrung nach zu vielen Fehlversuchen
-- Konfigurierbare Sperrzeit (Standard: 15 Minuten)
-- Countdown-Anzeige bis zur Entsperrung
-
-### 7. 🛠️ Verbesserte Scan-Steuerung
-- Bestätigungs-Checkbox vor Scan-Start
-- Info-Box zeigt Anzahl der zu scannenden Bibliotheken
-- Abbrechen-Button während laufendem Scan
-- Geschätzte Restzeit (ETA) während des Scans
-- Detaillierter Fortschritt: "X von Y Items"
-
-## 📝 Geänderte Dateien
-
-### Neue Dateien:
+### Neue Dateien
 - `notifications.py` - Telegram-Integration
-- `.gitignore` - Git-Konfiguration
-- `CHANGELOG.md` - Dieses Dokument
-
-### Aktualisierte Dateien:
-- `app.py` - Komplette GUI-Überarbeitung mit Tabs und Sicherheit
-- `logic.py` - Performance-Optimierungen und Telegram-Integration
-- `requirements.txt` - requests Bibliothek hinzugefügt
-- `.env` - Neue Umgebungsvariablen für Telegram und Sicherheit
-- `README.md` - Dokumentation aller neuen Features
-
-## 🔧 Neue Umgebungsvariablen
-
-```ini
-# Telegram (optional)
-TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
-TELEGRAM_CHAT_ID=YOUR_CHAT_ID
-
-# Sicherheit
-MAX_LOGIN_ATTEMPTS=5
-LOGIN_LOCKOUT_MINUTES=15
-```
-
-## 🚀 Upgrade-Anleitung
-
-1. Code aktualisieren (git pull)
-2. Dependencies installieren: `pip install -r requirements.txt`
-3. .env Datei aktualisieren (siehe oben)
-4. Service neu starten: `systemctl restart plexgui`
-
-## ✅ Tests durchgeführt
-
-- ✅ Python-Syntax validiert
-- ✅ Alle Importe erfolgreich
-- ✅ Notification-Modul getestet
-- ✅ Logic-Modul Funktionen getestet
-- ✅ Sicherheits-Features validiert
-- ✅ Tab-Navigation implementiert
-- ✅ Erfolgsrate-Berechnung korrekt
-- ✅ Caching-Funktionen integriert
+- `.gitignore`
+- `CHANGELOG.md`
