@@ -16,28 +16,22 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 def send_telegram_message(message: str) -> bool:
     """
     Send a message via Telegram Bot API.
-    
-    Args:
-        message: The message to send
-        
-    Returns:
-        True if successfully sent, False on error
     """
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        logger.debug("Telegram nicht konfiguriert (TELEGRAM_BOT_TOKEN oder TELEGRAM_CHAT_ID fehlt)")
+        logger.debug("Telegram nicht konfiguriert")
         return False
-    
+
     if TELEGRAM_BOT_TOKEN == "YOUR_BOT_TOKEN":
         logger.debug("Telegram nicht konfiguriert (Platzhalter-Token)")
         return False
-    
+
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
         "text": message,
         "parse_mode": "HTML"
     }
-    
+
     try:
         response = requests.post(url, json=payload, timeout=10)
         response.raise_for_status()
@@ -51,20 +45,14 @@ def send_telegram_message(message: str) -> bool:
 def send_scan_completion_notification(stats: Dict[str, int]) -> bool:
     """
     Send a notification after scan completion with statistics.
-    
-    Args:
-        stats: Dictionary with 'checked', 'fixed', 'failed' values
-        
-    Returns:
-        True if successfully sent, False on error
     """
     if not stats:
         return False
-    
+
     checked = stats.get('checked', 0)
     fixed = stats.get('fixed', 0)
     failed = stats.get('failed', 0)
-    
+
     # Erfolgsrate berechnen
     problems_found = fixed + failed
     if problems_found > 0:
@@ -73,7 +61,7 @@ def send_scan_completion_notification(stats: Dict[str, int]) -> bool:
         rate_text = f"{rate_emoji} {success_rate:.1f}%"
     else:
         rate_text = "✨ Keine Probleme gefunden"
-    
+
     message = f"""
 🚀 <b>Plex Smart Refresher - Scan abgeschlossen</b>
 
@@ -83,5 +71,6 @@ def send_scan_completion_notification(stats: Dict[str, int]) -> bool:
 • Fehler: {failed} ❌
 • Ergebnis: {rate_text}
 """
-    
+
     return send_telegram_message(message.strip())
+

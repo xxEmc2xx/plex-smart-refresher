@@ -2,14 +2,17 @@ import os
 import asyncio
 import datetime as dt
 import sqlite3
-
 import time
 import json
 import logging
 import threading
 from typing import List, Optional, Tuple, Dict, Any
+from contextlib import contextmanager
+
 from plexapi.server import PlexServer
 from dotenv import load_dotenv
+
+# Importiert notifications.py (Muss im selben Ordner liegen!)
 import notifications
 
 # Configure logging
@@ -113,8 +116,6 @@ def save_settings(settings):
         logger.error(f"Error saving settings: {e}")
 
 # --- DATABASE ---
-from contextlib import contextmanager
-
 
 @contextmanager
 def get_db_connection():
@@ -148,20 +149,38 @@ init_db()
 
 
 def save_result(rating_key, library, title, state, note):
-    with get_db_connection() as conn:
-        now = dt.datetime.now().isoformat(timespec="seconds")
-        conn.execute("""
-            INSERT INTO media_state(rating_key, library, title, updated_at, state, note, last_scan)
-            VALUES(?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(rating_key) DO UPDATE SET
-                library=excluded.library,
-                title=excluded.title,
-                updated_at=excluded.updated_at,
-                state=excluded.state,
-                note=excluded.note,
-                last_scan=excluded.last_scan
-        """, (rating_key, library, title, now, state, note, now))
-        conn.commit()
+    """
+    Speichert das Ergebnis in die DB. 
+    Enthält jetzt Error-Handling und Encoding-Schutz für kaputte Titel.
+    """
+    try:
+        # FIX: Titel bereinigen, falls er kaputte Zeichen enthält (z.B. ? statt Umlaute)
+        safe_title = title
+        if safe_title:
+            try:
+                # Versucht, Encoding-Fehler zu reparieren
+                safe_title = str(title).encode('utf-8', 'replace').decode('utf-8')
+            except Exception:
+                safe_title = "Unknown Title (Encoding Error)"
+
+        with get_db_connection() as conn:
+            now = dt.datetime.now().isoformat(timespec="seconds")
+            conn.execute("""
+                INSERT INTO media_state(rating_key, library, title, updated_at, state, note, last_scan)
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(rating_key) DO UPDATE SET
+                    library=excluded.library,
+                    title=excluded.title,
+                    updated_at=excluded.updated_at,
+                    state=excluded.state,
+                    note=excluded.note,
+                    last_scan=excluded.last_scan
+            """, (rating_key, library, safe_title, now, state, note, now))
+            conn.commit()
+            
+    except Exception as e:
+        logger.error(f"DB-FEHLER beim Speichern von {rating_key}: {e}")
+        # Wir crashen hier nicht mehr, damit der Loop weiterlaufen kann!
 
 
 def get_last_report(limit=100, only_fixed=False):
@@ -177,9 +196,6 @@ def get_last_report(limit=100, only_fixed=False):
 def get_total_statistics():
     """
     Berechnet Gesamtstatistiken aus der Datenbank.
-    
-    Returns:
-        Dictionary mit total_checked, total_fixed, total_failed, success_rate
     """
     with get_db_connection() as conn:
         c = conn.cursor()
@@ -244,10 +260,8 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
     max_items = settings.get("max_items", 50)
     target_libs = settings.get("libraries", [])
     dry_run = settings.get("dry_run", False)
-    batch_size = settings.get("batch_size", 5)
     
     cutoff = dt.datetime.now() - dt.timedelta(days=days)
-    start_time = time.time()
     
     # Phase 1: Alle Items sammeln
     log_callback("Phase 1: Sammle Items...")
@@ -283,10 +297,13 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
             items_processed += 1
             
             if progress_bar:
-                progress_bar.progress(
-                    items_processed / total_items * 0.3,
-                    text=f"Analysiere: {item.title} ({items_processed}/{total_items})"
-                )
+                try:
+                    progress_bar.progress(
+                        items_processed / total_items * 0.3,
+                        text=f"Analysiere: {item.title} ({items_processed}/{total_items})"
+                    )
+                except:
+                    pass
             
             if item.addedAt < cutoff:
                 continue
@@ -311,31 +328,56 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
                 log_callback("⚠️ Scan abgebrochen!")
                 break
             
-            log_callback(f"-> Fixe ({idx+1}/{total_to_fix}): {item.title}...")
+            # FIX: Einzelnes Try/Except pro Item, damit der ganze Prozess nicht stirbt
+            try:
+                log_callback(f"-> Fixe ({idx+1}/{total_to_fix}): {item.title}...")
+                
+                if progress_bar:
+                    try:
+                        progress_bar.progress(
+                            0.3 + ((idx + 1) / total_to_fix * 0.7),
+                            text=f"Fixe {idx+1}/{total_to_fix}: {item.title}"
+                        )
+                    except:
+                        pass
+                
+                ok, msg = await smart_refresh_item(item)
+                if ok:
+                    log_callback(f"✅ {item.title}: {msg}")
+                    save_result(item.ratingKey, lib_name, item.title, "fixed", msg)
+                    stats["fixed"] += 1
+                else:
+                    log_callback(f"❌ {item.title}: {msg}")
+                    # Auch Failed muss gespeichert werden, sonst Endlosschleife!
+                    save_result(item.ratingKey, lib_name, item.title, "failed", msg)
+                    stats["failed"] += 1
             
-            if progress_bar:
-                progress_bar.progress(
-                    0.3 + ((idx + 1) / total_to_fix * 0.7),
-                    text=f"Fixe {idx+1}/{total_to_fix}: {item.title}"
-                )
-            
-            ok, msg = await smart_refresh_item(item)
-            if ok:
-                log_callback(f"✅ {item.title}: {msg}")
-                save_result(item.ratingKey, lib_name, item.title, "fixed", msg)
-                stats["fixed"] += 1
-            else:
-                log_callback(f"❌ {item.title}: {msg}")
-                save_result(item.ratingKey, lib_name, item.title, "failed", msg)
+            except Exception as e:
+                # Fataler Fehler bei einem Item (z.B. Encoding Crash)
+                logger.error(f"CRASH bei Item {item.title if hasattr(item, 'title') else 'Unknown'}: {e}")
+                log_callback(f"⚠️ Überspringe defektes Item: {e}")
+                # Wir versuchen es als Failed zu speichern, damit es nicht wiederkommt
+                try:
+                    save_result(item.ratingKey, lib_name, "ERROR_ITEM", "failed", str(e))
+                except:
+                    pass
                 stats["failed"] += 1
 
     if progress_bar:
-        progress_bar.progress(1.0, text="Fertig!")
+        try:
+            progress_bar.progress(1.0, text="Fertig!")
+        except:
+            pass
     
     log_callback("Fertig.")
     
-    if stats and stats.get("checked", 0) > 0:
-        notifications.send_scan_completion_notification(stats)
+    # Benachrichtigung senden (nur wenn notifications importiert wurde)
+    try:
+        if stats and stats.get("checked", 0) > 0:
+            if 'notifications' in globals():
+                notifications.send_scan_completion_notification(stats)
+    except Exception as e:
+        logger.error(f"Fehler beim Senden der Benachrichtigung: {e}")
     
     return stats
 
