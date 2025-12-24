@@ -259,22 +259,44 @@ def needs_refresh(item) -> bool:
     if not item.summary: return True
     return False
 
-async def smart_refresh_item(item, status_callback=None) -> Tuple[bool, str]:
+async def smart_refresh_item(item, status_callback=None, settings=None) -> Tuple[bool, str]:
+    settings_from_args = settings if settings is not None else {}
+
+    if settings is None:
+        try:
+            settings_from_args = load_settings() or {}
+        except Exception as e:
+            logger.error(f"Error loading fallback settings: {e}")
+            settings_from_args = {}
+
+    try:
+        wait_total = int(settings_from_args.get("refresh_wait_total_seconds", 20))
+    except (TypeError, ValueError):
+        wait_total = 20
+
+    try:
+        wait_interval = int(settings_from_args.get("refresh_wait_interval_seconds", 4))
+    except (TypeError, ValueError):
+        wait_interval = 4
+
+    wait_total = wait_total if wait_total > 0 else 20
+    wait_interval = wait_interval if wait_interval > 0 else 4
+
     try:
         item.refresh()
     except Exception as e:
         return False, f"API Fehler: {str(e)}"
 
-    max_attempts = 12
+    max_attempts = max(1, (wait_total + wait_interval - 1) // wait_interval)
     for attempt in range(1, max_attempts + 1):
-        await asyncio.sleep(5)
+        await asyncio.sleep(wait_interval)
         try:
             item.reload()
             if not needs_refresh(item):
-                return True, f"Gefixt nach {attempt * 5}s"
-        except:
-            pass
-    return False, "Timeout (60s)"
+                return True, f"Gefixt nach {min(wait_total, attempt * wait_interval)}s"
+        except Exception:
+            continue
+    return False, f"Timeout ({wait_total}s)"
 
 
 def get_library_names():
@@ -381,7 +403,7 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
                     except:
                         pass
                 
-                ok, msg = await smart_refresh_item(item)
+                ok, msg = await smart_refresh_item(item, settings=settings)
                 if ok:
                     log_callback(f"✅ {item.title}: {msg}")
                     save_result(item.ratingKey, lib_name, item.title, "fixed", msg)
