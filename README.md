@@ -67,6 +67,48 @@ LOGIN_LOCKOUT_MINUTES=15
 
 **Plex Token finden**: `Settings > Network > Show Advanced > Plex.tv Token`
 
+## Empfehlung: Nginx Reverse Proxy mit Basic Auth
+
+Für eine sichere Bereitstellung hinter einem Reverse Proxy empfiehlt sich Nginx mit HTTP-Basic-Auth.
+
+- **Streamlit lokal binden**: Starte die App auf `127.0.0.1:8501`, damit sie nur lokal erreichbar ist.
+- **Port 8501 nicht freigeben**: Öffne Port `8501` nicht in der Firewall; Anfragen sollen ausschließlich über Nginx laufen.
+- **Kein doppelter Login**: Setze `GUI_PASSWORD` in der `.env` auf einen leeren Wert, wenn du Nginx Basic Auth nutzt, um zwei Logins zu vermeiden.
+
+### Beispiel Nginx-Serverblock
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name plex.example.com;
+
+    # TLS-Konfiguration (Zertifikate anpassen)
+    ssl_certificate /etc/letsencrypt/live/plex.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/plex.example.com/privkey.pem;
+
+    # Basic Auth
+    auth_basic "Plex GUI";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+
+    location / {
+        proxy_pass http://127.0.0.1:8501;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # WebSockets für Streamlit
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        # Timeouts für lange Requests
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+```
+
 ### Autostart aktivieren
 ```bash
 sudo cp plexgui.service /etc/systemd/system/
