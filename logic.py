@@ -367,7 +367,11 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
                 except:
                     pass
             
-            if item.addedAt < cutoff:
+            added_at = getattr(item, "addedAt", None) or getattr(item, "updatedAt", None)
+            
+            if isinstance(added_at, dt.datetime) and added_at < cutoff:
+            
+                continue
                 continue
             
             stats["checked"] += 1
