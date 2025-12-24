@@ -20,6 +20,7 @@ LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15"))
 def start_background_service():
     t = threading.Thread(target=logic.run_scheduler_thread, daemon=True)
     t.start()
+    logic.logger.info("Scheduler thread started")
     return t
 
 start_background_service()
