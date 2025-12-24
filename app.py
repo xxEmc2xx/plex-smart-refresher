@@ -193,13 +193,12 @@ def main():
                 log_area.text("\n".join(st.session_state.scan_logs[:15]))
 
             with st.spinner("Scan läuft..."):
-                stats = asyncio.run(
-                    logic.run_scan_engine(
-                        progress_bar, 
-                        gui_logger, 
-                        current_settings,
-                        st.session_state.cancel_scan
-                    )
+                stats = logic.start_scan(
+                    current_settings,
+                    progress_bar=progress_bar,
+                    log_callback=gui_logger,
+                    cancel_flag=st.session_state.cancel_scan,
+                    source="manual",
                 )
             
             st.session_state.scan_stats = stats
