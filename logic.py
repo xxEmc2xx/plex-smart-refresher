@@ -23,6 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 load_dotenv()
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PLEX_URL = os.getenv("PLEX_URL")
 PLEX_TOKEN = os.getenv("PLEX_TOKEN")
 try:
@@ -31,9 +32,10 @@ except ValueError:
     PLEX_TIMEOUT = 60
     logger.warning("Invalid PLEX_TIMEOUT value, using default: 60")
 
-DB_PATH = "refresh_state.db"
-SETTINGS_FILE = "settings.json"
-STATE_FILE = "run_state.json"
+DB_PATH = os.getenv("PSR_DB_PATH", os.path.join(BASE_DIR, "refresh_state.db"))
+SETTINGS_FILE = os.getenv("PSR_SETTINGS_PATH", os.path.join(BASE_DIR, "settings.json"))
+STATE_FILE = os.getenv("PSR_STATE_PATH", os.path.join(BASE_DIR, "run_state.json"))
+
 
 # Connection Pooling - Singleton Pattern
 _plex_connection = None
@@ -156,7 +158,9 @@ def update_last_run_date(date_str: str):
 @contextmanager
 def get_db_connection():
     """Context Manager für saubere DB-Verbindungen."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=30000;")
     conn.row_factory = sqlite3.Row
     try:
         yield conn
