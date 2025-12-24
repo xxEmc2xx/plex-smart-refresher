@@ -33,10 +33,14 @@ except ValueError:
 
 DB_PATH = "refresh_state.db"
 SETTINGS_FILE = "settings.json"
+STATE_FILE = "run_state.json"
 
 # Connection Pooling - Singleton Pattern
 _plex_connection = None
 _plex_last_check = None
+_run_state = None
+_state_lock = threading.Lock()
+scan_lock = threading.Lock()
 
 
 def get_plex_connection(force_reconnect=False):
@@ -114,6 +118,38 @@ def save_settings(settings):
             json.dump(settings, f, indent=4)
     except Exception as e:
         logger.error(f"Error saving settings: {e}")
+
+
+def _read_state_file():
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.error(f"Error loading run state: {e}")
+    return {"last_run_date": None}
+
+
+def load_run_state():
+    global _run_state
+    with _state_lock:
+        if _run_state is None:
+            _run_state = _read_state_file()
+        return dict(_run_state)
+
+
+def update_last_run_date(date_str: str):
+    global _run_state
+    with _state_lock:
+        if _run_state is None:
+            _run_state = _read_state_file()
+        _run_state["last_run_date"] = date_str
+        try:
+            with open(STATE_FILE, "w") as f:
+                json.dump(_run_state, f, indent=4)
+        except Exception as e:
+            logger.error(f"Error saving run state: {e}")
+    return date_str
 
 # --- DATABASE ---
 
@@ -381,6 +417,23 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
     
     return stats
 
+
+def start_scan(settings, progress_bar=None, log_callback=None, cancel_flag=None, source="manual", mark_run_date=True):
+    """Synchroner Einstiegspunkt für manuelle und geplante Scans mit globaler Sperre."""
+    log = log_callback or (lambda msg: logger.info(msg))
+
+    if not scan_lock.acquire(blocking=False):
+        log("⚠️ Ein anderer Scan läuft bereits. Überspringe.")
+        return None
+
+    try:
+        if mark_run_date:
+            today_str = dt.datetime.now().strftime("%Y-%m-%d")
+            update_last_run_date(today_str)
+        return asyncio.run(run_scan_engine(progress_bar, log, settings, cancel_flag))
+    finally:
+        scan_lock.release()
+
 # --- SCHEDULER ---
 def run_scheduler_thread():
     """
@@ -388,7 +441,6 @@ def run_scheduler_thread():
     Prüft alle 30 Sekunden und verwendet ein 2-Minuten-Fenster.
     """
     logger.info("⏰ Hintergrund-Scheduler gestartet.")
-    last_run_date = None
 
     while True:
         try:
@@ -397,6 +449,7 @@ def run_scheduler_thread():
                 target_time_str = settings.get("schedule_time", "04:00")
                 now = dt.datetime.now()
                 current_date_str = now.strftime("%Y-%m-%d")
+                last_run_date = load_run_state().get("last_run_date")
                 
                 # Parse target time
                 try:
@@ -413,19 +466,27 @@ def run_scheduler_thread():
                 
                 if in_window and last_run_date != current_date_str:
                     logger.info(f"⏰ ZEITPLAN AUSLÖSUNG: {now.strftime('%H:%M:%S')}")
-                    
-                    def dummy_log(msg): 
+                    update_last_run_date(current_date_str)
+
+                    def dummy_log(msg):
                         logger.info(f"[AUTO-SCAN] {msg}")
-                    
+
                     try:
-                        asyncio.run(run_scan_engine(None, dummy_log, settings))
-                        last_run_date = current_date_str
-                        logger.info("⏰ Geplanter Scan abgeschlossen.")
+                        result = start_scan(
+                            settings,
+                            progress_bar=None,
+                            log_callback=dummy_log,
+                            cancel_flag=None,
+                            source="scheduler",
+                            mark_run_date=False,
+                        )
+                        if result is not None:
+                            logger.info("⏰ Geplanter Scan abgeschlossen.")
+                        else:
+                            logger.info("⏭️ Geplanter Scan übersprungen (Scan läuft bereits).")
                     except Exception as scan_error:
                         logger.error(f"Fehler beim geplanten Scan: {scan_error}")
-                        # Trotzdem als gelaufen markieren um Endlosschleife zu vermeiden
-                        last_run_date = current_date_str
-                        
+
             time.sleep(30)  # Alle 30 Sekunden prüfen statt 59
         except Exception as e:
             logger.error(f"Scheduler Fehler: {e}")
