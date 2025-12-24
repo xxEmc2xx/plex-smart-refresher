@@ -40,3 +40,8 @@ Thumbs.db
 *.swo
 *~
 .env
+
+# local runtime/backups
+run_state.json
+run_state.json.bak
+logic.py.bak*
