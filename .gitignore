@@ -45,3 +45,12 @@ Thumbs.db
 run_state.json
 run_state.json.bak
 logic.py.bak*
+
+# --- Plex Smart Refresher GUI: local secrets/runtime ---
+auth.yaml
+logs/
+refresh_state.db-*
+refresh_state.db.bak*
+*.bak_*
+app.py.bak*
+jobs.py.bak*
