@@ -1,110 +1,190 @@
 import streamlit as st
+
+
+# --- Session State Defaults (robust) ---
+def _ensure_session_defaults():
+    defaults = {
+        "scan_running": False,
+        "scan_stats": None,
+        "scan_logs": [],
+        "active_job_id": None,
+        "auto_refresh": True,
+        "cancel_notice": None,
+        "authenticated": False,
+        "login_attempts": 0,
+        "lockout_until": None,
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+_ensure_session_defaults()
+
+@st.cache_data
+def get_cached_statistics():
+    """Cached Gesamtstatistiken aus der DB."""
+    try:
+        return logic.get_total_statistics()
+    except Exception:
+        return {"total_checked": 0, "total_fixed": 0, "total_failed": 0, "success_rate": 0}
+import streamlit_authenticator as stauth
+from auth import ensure_auth_config
 import asyncio
 import os
+# --- LOGIN CONFIG (auto-fix) ---
+PASSWORD = os.getenv("GUI_PASSWORD")
+MAX_LOGIN_ATTEMPTS = int(os.getenv("MAX_LOGIN_ATTEMPTS", "5"))
+LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15"))
+
 import datetime as dt
 import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import logic
 import threading
+import time
+import json
+
+import jobs
+
+@st.cache_resource
+def _startup_cleanup_once():
+    # Läuft 1x pro Streamlit-Prozess (nicht bei jedem Rerun)
+    try:
+        removed_logs = jobs.cleanup_old_logs()
+        removed_runs = jobs.cleanup_old_scan_runs()
+        if removed_logs or removed_runs:
+            print(f"[CLEANUP] removed_logs={removed_logs} removed_scan_runs={removed_runs}")
+    except Exception as e:
+        print(f"[CLEANUP] error: {e}")
+    return True
+
+_startup_cleanup_once()
 
 st.set_page_config(page_title="Plex Refresher", page_icon="🚀", layout="wide")
 
 # --- INITIALISIERUNG ---
 load_dotenv()
-PASSWORD = os.getenv("GUI_PASSWORD")
-MAX_LOGIN_ATTEMPTS = int(os.getenv("MAX_LOGIN_ATTEMPTS", "5"))
-LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15"))
 
+# --- STARTUP: Orphaned running jobs markieren (einmal pro Prozess) ---
 @st.cache_resource
-def start_background_service():
-    t = threading.Thread(target=logic.run_scheduler_thread, daemon=True)
-    t.start()
-    logic.logger.info("Scheduler thread started")
-    return t
+def _startup_orphan_recovery():
+    return jobs.mark_orphaned_jobs_interrupted()
 
-start_background_service()
-
-# Session State Initialisierung
-if "scan_running" not in st.session_state:
-    st.session_state.scan_running = False
-if "scan_stats" not in st.session_state:
-    st.session_state.scan_stats = None
-if "scan_logs" not in st.session_state:
-    st.session_state.scan_logs = []
-if "cancel_scan" not in st.session_state:
-    st.session_state.cancel_scan = {"cancelled": False}
-if "login_attempts" not in st.session_state:
-    st.session_state.login_attempts = 0
-if "lockout_until" not in st.session_state:
-    st.session_state.lockout_until = None
-
-# --- LOGIN SICHERHEIT ---
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
+_startup_orphan_recovery()
 
 
-def check_login_lockout():
-    """Prüfe ob Login gesperrt ist"""
-    if st.session_state.lockout_until:
-        if datetime.now() < st.session_state.lockout_until:
-            remaining = int((st.session_state.lockout_until - datetime.now()).total_seconds() // 60)
-            st.error(f"🔒 Login gesperrt. Versuche es in {remaining} Minuten erneut.")
-            return False
+# --- BACKGROUND SCAN JOB RUNNER ---
+
+def _run_scan_job(job_id: str, settings: dict):
+    """
+    Führt einen Scan als Background-Job aus und beachtet cancel_requested aus der DB.
+    """
+    import datetime as _dt
+    import json as _json
+    import traceback as _tb
+    from pathlib import Path as _Path
+    def _cancel_check() -> bool:
+        try:
+            return bool(jobs.is_cancel_requested(job_id))
+        except Exception:
+            try:
+                j = jobs.get_job(job_id) or {}
+                return bool(j.get("cancel_requested"))
+            except Exception:
+                return False
+
+    def _append_log(msg: str):
+        try:
+            job = jobs.get_job(job_id)
+            lp = (job or {}).get("log_path")
+            if not lp:
+                return
+            ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            _Path(lp).parent.mkdir(parents=True, exist_ok=True)
+            with open(lp, "a", encoding="utf-8") as f:
+                f.write(f"{ts} {msg}\n")
+        except Exception:
+            pass
+        return _cancel_check()
+
+    def job_log(msg: str):
+        # bei jedem Log einmal cancel_requested checken
+        _append_log(msg)
+
+    try:
+        _append_log(f"[JOB {job_id}] started (source=manual)")
+
+        # Scan laufen lassen (wichtig: cancel_flag wird übergeben!)
+        stats = logic.start_scan(
+            settings,
+            progress_bar=None,
+            log_callback=job_log,
+            cancel_flag=_cancel_check,
+            source="manual",
+            mark_run_date=False,
+        )
+
+        if _cancel_check():
+            jobs.set_job_status(job_id, status="cancelled", stats=stats, error="cancelled")
+            _append_log("🛑 Job beendet (cancelled).")
         else:
-            # Lockout abgelaufen
-            st.session_state.lockout_until = None
-            st.session_state.login_attempts = 0
-    return True
+            jobs.set_job_status(job_id, status="success", stats=stats, error=None)
+            _append_log("✅ Job erfolgreich beendet.")
 
+    except Exception as e:
+        try:
+            jobs.set_job_status(job_id, status="failed", stats=None, error=str(e))
+        except Exception:
+            pass
+        _append_log(f"❌ Job failed: {e}")
+        _append_log(_tb.format_exc())
+def require_auth() -> None:
+    config = ensure_auth_config()
+    authenticator = stauth.Authenticate(
+        config["credentials"],
+        config["cookie"]["name"],
+        config["cookie"]["key"],
+        config["cookie"]["expiry_days"],
+    )
 
-def handle_failed_login():
-    """Behandle fehlgeschlagenen Login"""
-    st.session_state.login_attempts += 1
-    
-    if st.session_state.login_attempts >= MAX_LOGIN_ATTEMPTS:
-        st.session_state.lockout_until = datetime.now() + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
-        st.error(f"🔒 Zu viele Versuche! Login für {LOGIN_LOCKOUT_MINUTES} Minuten gesperrt.")
-    else:
-        remaining = MAX_LOGIN_ATTEMPTS - st.session_state.login_attempts
-        st.error(f"❌ Falsches Passwort! Noch {remaining} Versuche übrig.")
+    authenticator.login(
+        location="main",
+        max_login_attempts=MAX_LOGIN_ATTEMPTS,
+        key="Login",
+        fields={
+            "Form name": "Login",
+            "Username": "Benutzername",
+            "Password": "Passwort",
+            "Login": "Anmelden",
+        },
+    )
 
-
-def check_password():
-    if not st.session_state.authenticated:
-        if not check_login_lockout():
-            return False
-            
-        pwd = st.text_input("🔑 Passwort eingeben:", type="password", key="pwd_input")
-        
-        if st.button("Login", type="primary"):
-            if pwd == PASSWORD:
-                st.session_state.authenticated = True
-                st.session_state.login_attempts = 0
-                st.session_state.lockout_until = None
-                st.rerun()
-            else:
-                handle_failed_login()
-                st.rerun()
-        return False
-    return True
-
-
-# Caching für bessere Performance
-@st.cache_data(ttl=300)  # 5 Minuten Cache
-def get_cached_library_names():
-    return logic.get_library_names()
-
-
-@st.cache_data(ttl=60)  # 1 Minute Cache
-def get_cached_statistics():
-    return logic.get_total_statistics()
-
-
-# --- HAUPTPROGRAMM ---
-def main():
-    if not check_password():
+    if st.session_state.get("authentication_status") is True:
+        authenticator.logout("Logout", location="sidebar", key="Logout")
+        st.sidebar.caption(f"Eingeloggt als: {st.session_state.get('username')}")
         return
+
+    if st.session_state.get("authentication_status") is False:
+        st.error("❌ Benutzername/Passwort ist falsch.")
+    else:
+        st.info("Bitte einloggen.")
+        st.caption("Standard-Benutzername ist „admin“ (PSR_AUTH_USERNAME).")
+    st.stop()
+
+
+
+@st.cache_data(ttl=300)
+def get_cached_library_names():
+    """Cached Plex-Library-Namen (TTL 5 Minuten)."""
+    try:
+        return logic.get_library_names()
+    except Exception:
+        return []
+
+
+def main():
+    require_auth()
 
     current_settings = logic.load_settings()
 
@@ -122,98 +202,182 @@ def main():
         
         # Scan-Button mit Bestätigung
         col1, col2 = st.columns([1, 3])
+
+        # Live-Status VOR den Buttons setzen (damit 'Scan abbrechen' sofort erscheint)
+        running_now = jobs.get_running_job()
+        st.session_state.scan_running = bool(running_now)
+
         
         confirm = col1.checkbox("Scan bestätigen", key="confirm_scan")
+
+        # DB-Status VOR den Buttons bestimmen (wichtig für Safari/UI)
+        running = jobs.get_running_job()
+        is_running = bool(running)
+        st.session_state.scan_running = is_running
+
         scan_button = col1.button(
-            "▶️ JETZT SCANNEN", 
-            type="primary", 
-            disabled=(st.session_state.scan_running or not confirm),
-            use_container_width=True
+            "▶️ JETZT SCANNEN",
+            type="primary",
+            disabled=(is_running or not confirm),
+            width="stretch"
         )
-        
-        # Abbrechen-Button während Scan
-        if st.session_state.scan_running:
-            if col2.button("⏹️ SCAN ABBRECHEN", type="secondary", use_container_width=True):
-                st.session_state.cancel_scan["cancelled"] = True
-                st.warning("Abbruch wird verarbeitet...")
-        
+
+        # Abbrechen-Button während Scan (DB-basiert, Safari-safe)
+        if is_running:
+            if col2.button("⏹️ SCAN ABBRECHEN", type="secondary"):
+                jobs.request_cancel(running["job_id"])
+                st.session_state.cancel_notice = running["job_id"]
+                # kein sofortiges st.rerun(): sonst sieht man die Meldung oft nicht
+
+        # Persistentes Feedback, falls Cancel gedrückt wurde
+        if st.session_state.cancel_notice:
+            st.warning(f"⚠️ Abbruch angefordert (Job {st.session_state.cancel_notice}).")
+            # Wenn nichts mehr läuft, Notice zurücksetzen
+            if not is_running:
+                st.session_state.cancel_notice = None
+
         if scan_button:
-            st.session_state.scan_running = True
-            st.session_state.cancel_scan = {"cancelled": False}
+            running = jobs.get_running_job()
+            if running:
+                st.warning(f"⚠️ Es läuft bereits ein Scan (Job {running['job_id']}).")
+            else:
+                job = jobs.create_scan_job(source="manual")
+                st.session_state.active_job_id = job["job_id"]
+                t = threading.Thread(target=_run_scan_job, args=(job["job_id"], current_settings), daemon=True)
+                t.start()
+                st.success(f"✅ Scan im Hintergrund gestartet (Job {job['job_id']}).")
             st.rerun()
 
         # --- METRIKEN MIT ERFOLGSRATE ---
+        # --- Stats aus DB (letzter Job) laden, falls Session-Stats leer sind ---
+        db_stats = None
+        try:
+            last_jobs = jobs.list_jobs(limit=1)
+            if last_jobs and last_jobs[0].get("stats_json"):
+                db_stats = json.loads(last_jobs[0]["stats_json"])
+        except Exception:
+            db_stats = None
+
+        stats_to_show = st.session_state.scan_stats or db_stats
+
+        # --- METRIKEN MIT ERFOLGSRATE ---
         stats_container = st.container()
-        if st.session_state.scan_stats:
+        if stats_to_show:
             with stats_container:
-                c1, c2, c3, c4 = st.columns(4)
-                checked = st.session_state.scan_stats['checked']
-                fixed = st.session_state.scan_stats['fixed']
-                failed = st.session_state.scan_stats['failed']
+                c1, c2, c3, c4, c5 = st.columns(5)
+                checked = stats_to_show.get('checked', 0)
+                fixed = stats_to_show.get('fixed', 0)
+                would_fix = stats_to_show.get('would_fix', 0)
+                failed = stats_to_show.get('failed', 0)
                 
-                # Erfolgsrate berechnen
+                # Erfolgsrate berechnen (nur echte Fixes zählen)
                 problems_found = fixed + failed
                 if problems_found > 0:
                     success_rate = (fixed / problems_found * 100)
-                    # Farbe basierend auf Erfolgsrate
                     if success_rate >= 80:
-                        rate_color = "normal"
                         rate_emoji = "🟢"
                     elif success_rate >= 50:
-                        rate_color = "normal"
                         rate_emoji = "🟡"
                     else:
-                        rate_color = "inverse"
                         rate_emoji = "🔴"
                     rate_text = f"{rate_emoji} {success_rate:.1f}%"
                 else:
-                    # Keine Probleme gefunden
                     rate_text = "✨ Alles OK"
-                    rate_color = "normal"
                 
                 c1.metric("Geprüft", checked)
                 c2.metric("Gefixt", fixed)
-                c3.metric("Fehler", failed)
-                c4.metric("Erfolgsrate", rate_text)
+                c3.metric("Würde fixen", would_fix)
+                c4.metric("Fehler", failed)
+                c5.metric("Erfolgsrate", rate_text)
         else:
             with stats_container:
-                c1, c2, c3, c4 = st.columns(4)
+                c1, c2, c3, c4, c5 = st.columns(5)
                 c1.metric("Geprüft", "-")
                 c2.metric("Gefixt", "-")
-                c3.metric("Fehler", "-")
-                c4.metric("Erfolgsrate", "-")
+                c3.metric("Würde fixen", "-")
+                c4.metric("Fehler", "-")
+                c5.metric("Erfolgsrate", "-")
 
-        # --- SCAN LOGIK ---
-        if st.session_state.scan_running:
-            st.session_state.scan_logs = [] 
-            progress_bar = st.progress(0)
-            log_area = st.empty()
-            
-            def gui_logger(msg):
-                st.session_state.scan_logs.insert(0, f"• {msg}")
-                log_area.text("\n".join(st.session_state.scan_logs[:15]))
-
-            with st.spinner("Scan läuft..."):
-                stats = logic.start_scan(
-                    current_settings,
-                    progress_bar=progress_bar,
-                    log_callback=gui_logger,
-                    cancel_flag=st.session_state.cancel_scan,
-                    source="manual",
-                )
-            
-            st.session_state.scan_stats = stats
+        # --- SCAN LOGIK (Background Job) ---
+        running = jobs.get_running_job()
+        if running:
+            st.session_state.scan_running = True
+            st.info(f"🔄 Scan läuft im Hintergrund (Job {running['job_id']}).")
+        else:
             st.session_state.scan_running = False
-            st.session_state.cancel_scan = {"cancelled": False}
-            st.rerun()
 
-        # --- LIVE PROTOKOLL ---
+        # --- JOB STATUS + PERSISTENTES LOG (aus Datei) ---
         st.divider()
-        with st.expander("📜 Live Protokoll", expanded=st.session_state.scan_running):
-            if st.session_state.scan_logs:
-                st.text("\n".join(st.session_state.scan_logs[:50]))
+        running = jobs.get_running_job()
+        last_jobs = jobs.list_jobs(limit=1)
+        last_job = last_jobs[0] if last_jobs else None
+
+        # active_job_id merken (Recovery nach Reload)
+        if "active_job_id" not in st.session_state:
+            st.session_state.active_job_id = None
+        if running:
+            st.session_state.active_job_id = running["job_id"]
+        elif not st.session_state.active_job_id and last_job:
+            st.session_state.active_job_id = last_job["job_id"]
+
+        with st.expander("📜 Job Log (persistent)", expanded=bool(running)):
+            # Auto-Refresh (nur sinnvoll wenn running)
+            if "auto_refresh" not in st.session_state:
+                st.session_state.auto_refresh = True
+
+            # Job-Auswahl: letzte 20 Jobs
+            job_list = jobs.list_jobs(limit=20)
+            options = []
+            for j in job_list:
+                started = (j.get("started_at") or "")[:19].replace("T", " ")
+                options.append(f"{started} | {j.get('status')} | {j.get('job_id')}")
+            selected = None
+            if options:
+                default_idx = 0
+                # wenn active_job_id existiert, passenden Eintrag vorwählen
+                if st.session_state.active_job_id:
+                    for i, opt in enumerate(options):
+                        if st.session_state.active_job_id in opt:
+                            default_idx = i
+                            break
+                selected = st.selectbox("Letzte Jobs", options, index=default_idx)
+                # job_id aus dem String extrahieren (letztes Feld)
+                st.session_state.active_job_id = selected.split("|")[-1].strip()
+
+            # Auto-Refresh Toggle
+            if running:
+                st.session_state.auto_refresh = st.toggle("🔁 Auto-Refresh (alle 2s)", value=st.session_state.auto_refresh)
             else:
-                st.info("Warte auf Start...")
+                st.session_state.auto_refresh = False
+            job = running or (jobs.get_job(st.session_state.active_job_id) if st.session_state.active_job_id else None) or last_job
+
+            if not job:
+                st.info("Noch kein Job vorhanden. Starte einen Scan.")
+            else:
+                c1, c2, c3 = st.columns([2, 1, 1])
+                c1.markdown(f"**Job:** `{job['job_id']}`  •  **Status:** `{job['status']}`")
+                if job.get("started_at"):
+                    c2.caption(f"Start: {job['started_at']}")
+                if job.get("finished_at"):
+                    c3.caption(f"Ende: {job['finished_at']}")
+
+                # Buttons
+                b1, b2 = st.columns([1, 1])
+                if b1.button("🔄 Log aktualisieren"):
+                    st.rerun()
+
+
+                # Tail anzeigen
+                tail = jobs.tail_job_log(job["job_id"], n=200)
+                if tail.strip():
+                    st.text_area("Letzte 200 Zeilen", tail, height=320)
+                else:
+                    st.info("Log ist noch leer oder Logfile nicht gefunden.")
+
+                # Auto-Refresh (nur wenn Job läuft)
+                if running and st.session_state.get("auto_refresh"):
+                    time.sleep(2)
+                    st.rerun()
     
     # --- TAB 2: STATISTIKEN ---
     with tab2:
@@ -307,7 +471,7 @@ def main():
             if page_data:
                 st.dataframe(
                     pd.DataFrame(page_data), 
-                    use_container_width=True, 
+                    width="stretch", 
                     hide_index=True,
                     column_config={
                         "S": st.column_config.TextColumn("Status", width="small"),

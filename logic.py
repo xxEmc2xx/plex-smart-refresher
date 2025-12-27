@@ -44,6 +44,19 @@ _run_state = None
 _state_lock = threading.Lock()
 scan_lock = threading.Lock()
 
+def _is_cancel_requested(cancel_flag) -> bool:
+    """cancel_flag kann dict (legacy) ODER callable (DB-check) sein."""
+    try:
+        if cancel_flag is None:
+            return False
+        if callable(cancel_flag):
+            return bool(cancel_flag())
+        return bool(cancel_flag.get("cancelled", False))
+    except Exception:
+        return False
+
+_plex_lock = threading.Lock()
+
 
 def get_plex_connection(force_reconnect=False):
     """
@@ -64,26 +77,27 @@ def get_plex_connection(force_reconnect=False):
     )
     
     if needs_reconnect:
-        # Verbindung testen oder neu aufbauen
-        if _plex_connection is not None:
+        with _plex_lock:
+            # Verbindung testen oder neu aufbauen
+            if _plex_connection is not None:
+                try:
+                    # Schneller Health-Check
+                    _plex_connection.library.sections()
+                    _plex_last_check = now
+                    return _plex_connection
+                except Exception:
+                    logger.warning("Plex-Verbindung verloren, versuche Reconnect...")
+                    _plex_connection = None
+            
+            # Neue Verbindung aufbauen
             try:
-                # Schneller Health-Check
-                _plex_connection.library.sections()
+                _plex_connection = PlexServer(PLEX_URL, PLEX_TOKEN, timeout=PLEX_TIMEOUT)
                 _plex_last_check = now
-                return _plex_connection
-            except Exception:
-                logger.warning("Plex-Verbindung verloren, versuche Reconnect...")
+                logger.info("Plex-Verbindung hergestellt")
+            except Exception as e:
+                logger.error(f"Fehler beim Herstellen der Plex-Verbindung: {e}")
                 _plex_connection = None
-        
-        # Neue Verbindung aufbauen
-        try:
-            _plex_connection = PlexServer(PLEX_URL, PLEX_TOKEN, timeout=PLEX_TIMEOUT)
-            _plex_last_check = now
-            logger.info("Plex-Verbindung hergestellt")
-        except Exception as e:
-            logger.error(f"Fehler beim Herstellen der Plex-Verbindung: {e}")
-            _plex_connection = None
-            raise
+                raise
     
     return _plex_connection
 
@@ -252,6 +266,20 @@ def get_total_statistics():
         "success_rate": success_rate
     }
 
+
+def get_media_state_row(rating_key: str):
+    """Liest den letzten gespeicherten Zustand für ein Item (media_state)."""
+    try:
+        with get_db_connection() as conn:
+            return conn.execute(
+                "SELECT state, last_scan, note FROM media_state WHERE rating_key=?",
+                (rating_key,),
+            ).fetchone()
+    except Exception as e:
+        logger.error(f"Fehler beim Lesen von media_state({rating_key}): {e}")
+        return None
+
+
 # --- PLEX LOGIC ---
 def needs_refresh(item) -> bool:
     if not item.guids: return True
@@ -259,7 +287,7 @@ def needs_refresh(item) -> bool:
     if not item.summary: return True
     return False
 
-async def smart_refresh_item(item, status_callback=None, settings=None) -> Tuple[bool, str]:
+async def smart_refresh_item(item, status_callback=None, settings=None, cancel_flag=None) -> Tuple[bool, str]:
     settings_from_args = settings if settings is not None else {}
 
     if settings is None:
@@ -282,20 +310,26 @@ async def smart_refresh_item(item, status_callback=None, settings=None) -> Tuple
     wait_total = wait_total if wait_total > 0 else 20
     wait_interval = wait_interval if wait_interval > 0 else 4
 
+
+    if _is_cancel_requested(cancel_flag):
+        return False, "Abbruch angefordert"
     try:
-        item.refresh()
+        await asyncio.to_thread(item.refresh)
     except Exception as e:
         return False, f"API Fehler: {str(e)}"
 
     max_attempts = max(1, (wait_total + wait_interval - 1) // wait_interval)
     for attempt in range(1, max_attempts + 1):
-        await asyncio.sleep(wait_interval)
+        if _is_cancel_requested(cancel_flag):
+            return False, "Abbruch angefordert"
         try:
-            item.reload()
+            await asyncio.to_thread(item.reload)
             if not needs_refresh(item):
                 return True, f"Gefixt nach {min(wait_total, attempt * wait_interval)}s"
         except Exception:
-            continue
+            pass
+        if attempt < max_attempts:
+            await asyncio.sleep(wait_interval)
     return False, f"Timeout ({wait_total}s)"
 
 
@@ -317,7 +351,8 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
         log_callback(f"Verbindungsfehler: {e}")
         return None
 
-    stats = {"checked": 0, "fixed": 0, "failed": 0}
+    stats = {"checked": 0, "fixed": 0,
+        "would_fix": 0, "failed": 0}
     days = settings.get("days", 30)
     max_items = settings.get("max_items", 50)
     target_libs = settings.get("libraries", [])
@@ -329,9 +364,10 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
     log_callback("Phase 1: Sammle Items...")
     all_items = []
     items_to_refresh = []
+    retry_keys = set()
     
     for lib_name in target_libs:
-        if cancel_flag and cancel_flag.get("cancelled", False):
+        if _is_cancel_requested(cancel_flag):
             break
         try:
             lib = plex.library.section(lib_name)
@@ -340,20 +376,87 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
         except Exception as e:
             log_callback(f"Fehler beim Laden von {lib_name}: {e}")
 
+
+    # Retry-Pool: zuletzt fehlgeschlagene Items aus der DB zusätzlich prüfen (auch wenn alt)
+    try:
+        retry_limit = int(settings.get("failed_retry_pool_limit", 50))
+    except Exception:
+        retry_limit = 50
+
+    if retry_limit > 0:
+        try:
+            # all_items -> dict, damit wir einfach Items hinzufügen können
+            items_by_lib = {ln: list(itms) for ln, itms in all_items}
+            existing_keys = set()
+            for ln, itms in items_by_lib.items():
+                for it in itms:
+                    rk = getattr(it, "ratingKey", None)
+                    if rk is not None:
+                        existing_keys.add(str(rk))
+
+            with get_db_connection() as conn:
+                rows = conn.execute(
+                    """SELECT rating_key, library, last_scan
+                        FROM media_state
+                        WHERE state='failed'
+                        ORDER BY last_scan DESC
+                        LIMIT ?""",
+                    (retry_limit,),
+                ).fetchall()
+
+            added = 0
+            for r in rows:
+                rk = r["rating_key"]
+                lib = r["library"]
+                if rk is None:
+                    continue
+                rk_s = str(rk)
+
+                # nur innerhalb der aktuell ausgewählten Libraries
+                if target_libs and lib and lib not in target_libs:
+                    continue
+
+                # nicht doppelt, wenn schon in den "neuesten" Items enthalten
+                if rk_s in existing_keys:
+                    continue
+
+                try:
+                    item = await asyncio.to_thread(plex.fetchItem, int(rk))
+                except Exception:
+                    continue
+
+                # Library bestimmen (DB-Wert bevorzugen)
+                lib_name = lib or getattr(item, "librarySectionTitle", None) or "Unbekannt"
+                if target_libs and lib_name not in target_libs:
+                    continue
+
+                items_by_lib.setdefault(lib_name, []).append(item)
+                retry_keys.add(rk_s)
+                existing_keys.add(rk_s)
+                added += 1
+
+            if added > 0:
+                log_callback(f"🔁 Retry-Pool: +{added} failed Items aus DB hinzugefügt (Limit={retry_limit})")
+
+            # zurück zu all_items in stabiler Reihenfolge
+            all_items = [(ln, items_by_lib.get(ln, [])) for ln in target_libs if ln in items_by_lib]
+        except Exception as e:
+            logger.error(f"Retry-Pool Fehler: {e}")
+
     # Phase 2: Items analysieren
     log_callback("Phase 2: Analysiere Items...")
     total_items = sum(len(items) for _, items in all_items)
     items_processed = 0
     
     for lib_name, items in all_items:
-        if cancel_flag and cancel_flag.get("cancelled", False):
+        if _is_cancel_requested(cancel_flag):
             log_callback("⚠️ Scan abgebrochen!")
             break
             
         log_callback(f"Analysiere: {lib_name}")
         
         for item in items:
-            if cancel_flag and cancel_flag.get("cancelled", False):
+            if _is_cancel_requested(cancel_flag):
                 break
                 
             items_processed += 1
@@ -368,11 +471,17 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
                     pass
             
             added_at = getattr(item, "addedAt", None) or getattr(item, "updatedAt", None)
-            
-            if isinstance(added_at, dt.datetime) and added_at < cutoff:
-            
+            if added_at is None:
+                log_callback(f"⚠️ {item.title}: addedAt/updatedAt fehlt → übersprungen")
                 continue
-                continue
+
+            
+            rk_s = str(getattr(item, "ratingKey", ""))
+
+            # Cutoff (days) gilt NICHT für Retry-Pool Items
+            if rk_s not in retry_keys:
+                if isinstance(added_at, dt.datetime) and added_at < cutoff:
+                    continue
             
             stats["checked"] += 1
             
@@ -380,8 +489,31 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
                 if dry_run:
                     log_callback(f"-> [SIM] Würde fixen: {item.title}")
                     save_result(item.ratingKey, lib_name, item.title, "dry_run", "Simulation")
-                    stats["fixed"] += 1
+                    stats["would_fix"] += 1
                 else:
+                    # Backoff: failed Items nicht innerhalb von 24h erneut versuchen
+                    backoff_hours = 24
+                    try:
+                        backoff_hours = int(settings.get("failed_backoff_hours", 24))
+                    except Exception:
+                        backoff_hours = 24
+
+                    row = get_media_state_row(str(item.ratingKey))
+                    if row and row["state"] == "failed" and row["last_scan"]:
+                        try:
+                            last = dt.datetime.fromisoformat(row["last_scan"])
+                            now = dt.datetime.now(last.tzinfo) if getattr(last, "tzinfo", None) else dt.datetime.now()
+                            age = now - last
+                            backoff = dt.timedelta(hours=backoff_hours)
+                            if age < backoff:
+                                remaining = backoff - age
+                                mins = int(remaining.total_seconds() // 60)
+                                log_callback(f"⏳ Backoff: {item.title} (failed vor {int(age.total_seconds()//60)} min) → überspringe noch ~{mins} min")
+                                continue
+                        except Exception:
+                            # Wenn Parsing fehlschlägt, kein Backoff anwenden
+                            pass
+
                     items_to_refresh.append((item, lib_name))
     
     # Phase 3: Sequentielle Verarbeitung
@@ -390,7 +522,7 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
         log_callback(f"Phase 3: Fixe {total_to_fix} Items...")
         
         for idx, (item, lib_name) in enumerate(items_to_refresh):
-            if cancel_flag and cancel_flag.get("cancelled", False):
+            if _is_cancel_requested(cancel_flag):
                 log_callback("⚠️ Scan abgebrochen!")
                 break
             
@@ -407,7 +539,7 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
                     except:
                         pass
                 
-                ok, msg = await smart_refresh_item(item, settings=settings)
+                ok, msg = await smart_refresh_item(item, settings=settings, cancel_flag=cancel_flag)
                 if ok:
                     log_callback(f"✅ {item.title}: {msg}")
                     save_result(item.ratingKey, lib_name, item.title, "fixed", msg)
