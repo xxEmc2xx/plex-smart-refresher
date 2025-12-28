@@ -13,6 +13,10 @@ Lokale Secrets/Runtime-Artefakte werden via .gitignore ausgeschlossen (auth.yaml
 - Orphan-Recovery: stale running Jobs werden beim Neustart als interrupted markiert
 - Cleanup/Retention: automatische Bereinigung alter Logs und Scan-Runs (Env-basiert)
 - Cookie-Login via streamlit-authenticator (Single-User)
+- Automatischer Scheduler: tägliche Scans zur konfigurierten Uhrzeit (startet nach erstem Browser-Zugriff)
+- Scheduler-Jobs erscheinen in der UI mit vollständigem Log
+- Mobile-optimierte Oberfläche (iPhone Safari, responsive Metriken)
+- Scheduler-Status Badge zeigt Zeitplan und letzten Lauf
 
 ## Projektstruktur
 
