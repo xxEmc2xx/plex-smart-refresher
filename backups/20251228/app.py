@@ -20,7 +20,7 @@ def _ensure_session_defaults():
 
 _ensure_session_defaults()
 
-@st.cache_data(ttl=60)
+@st.cache_data
 def get_cached_statistics():
     """Cached Gesamtstatistiken aus der DB."""
     try:
@@ -73,17 +73,6 @@ def _startup_orphan_recovery():
 
 _startup_orphan_recovery()
 
-# --- STARTUP: Scheduler-Thread starten (einmal pro Prozess) ---
-@st.cache_resource
-def _start_scheduler_thread():
-    """Startet den Hintergrund-Scheduler (einmal pro Prozess)."""
-    t = threading.Thread(target=logic.run_scheduler_thread, daemon=True)
-    t.start()
-    logic.logger.info("⏰ Scheduler-Thread via app.py gestartet")
-    return t
-
-_start_scheduler_thread()
-
 
 # --- BACKGROUND SCAN JOB RUNNER ---
 
@@ -124,6 +113,8 @@ def _run_scan_job(job_id: str, settings: dict):
         _append_log(msg)
 
     try:
+        _append_log(f"[JOB {job_id}] started (source=manual)")
+
         # Scan laufen lassen (wichtig: cancel_flag wird übergeben!)
         stats = logic.start_scan(
             settings,
@@ -567,6 +558,11 @@ def main():
         if new_settings != current_settings:
             logic.save_settings(new_settings)
             st.success("✅ Einstellungen gespeichert")
+
+        st.divider()
+        if st.button("🚪 Abmelden"):
+            st.session_state.authenticated = False
+            st.rerun()
 
 if __name__ == "__main__":
     main()

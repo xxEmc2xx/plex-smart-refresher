@@ -13,12 +13,7 @@ from plexapi.server import PlexServer
 from dotenv import load_dotenv
 
 # Importiert notifications.py (Muss im selben Ordner liegen!)
-try:
-    import notifications
-    HAS_NOTIFICATIONS = True
-except ImportError:
-    HAS_NOTIFICATIONS = False
-    logger.warning("notifications.py nicht gefunden - Benachrichtigungen deaktiviert")
+import notifications
 
 # Configure logging
 logging.basicConfig(
@@ -577,7 +572,7 @@ async def run_scan_engine(progress_bar, log_callback, settings, cancel_flag=None
     # Benachrichtigung senden (nur wenn notifications importiert wurde)
     try:
         if stats and stats.get("checked", 0) > 0:
-            if HAS_NOTIFICATIONS:
+            if 'notifications' in globals():
                 notifications.send_scan_completion_notification(stats)
     except Exception as e:
         logger.error(f"Fehler beim Senden der Benachrichtigung: {e}")
@@ -606,10 +601,7 @@ def run_scheduler_thread():
     """
     Hintergrund-Scheduler mit robusterem Zeitfenster-Check.
     Prüft alle 30 Sekunden und verwendet ein 2-Minuten-Fenster.
-    Nutzt das Job-System für Logging und UI-Sichtbarkeit.
     """
-    import jobs  # Lazy import - kein Circular Import
-
     logger.info("⏰ Hintergrund-Scheduler gestartet.")
 
     while True:
@@ -620,7 +612,7 @@ def run_scheduler_thread():
                 now = dt.datetime.now()
                 current_date_str = now.strftime("%Y-%m-%d")
                 last_run_date = load_run_state().get("last_run_date")
-
+                
                 # Parse target time
                 try:
                     target_hour, target_minute = map(int, target_time_str.split(":"))
@@ -629,48 +621,32 @@ def run_scheduler_thread():
                     logger.error(f"Ungültiges Zeitformat: {target_time_str}")
                     time.sleep(60)
                     continue
-
+                
                 # Zeitfenster-Check: 2 Minuten Toleranz
                 time_diff = abs((now - target_time).total_seconds())
                 in_window = time_diff <= 120  # 2 Minuten Fenster
-
+                
                 if in_window and last_run_date != current_date_str:
                     logger.info(f"⏰ ZEITPLAN AUSLÖSUNG: {now.strftime('%H:%M:%S')}")
+                    update_last_run_date(current_date_str)
 
-                    # Job erstellen (erscheint in UI)
-                    job = jobs.create_scan_job(source="scheduler")
-                    job_id = job["job_id"]
-                    log_path = job.get("log_path")
-
-                    def job_log(msg):
-                        """Schreibt ins Job-Log-File und an Logger."""
+                    def dummy_log(msg):
                         logger.info(f"[AUTO-SCAN] {msg}")
-                        if log_path:
-                            try:
-                                ts = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                with open(log_path, "a", encoding="utf-8") as f:
-                                    f.write(f"{ts} {msg}\n")
-                            except Exception:
-                                pass
 
                     try:
                         result = start_scan(
                             settings,
                             progress_bar=None,
-                            log_callback=job_log,
+                            log_callback=dummy_log,
                             cancel_flag=None,
                             source="scheduler",
                             mark_run_date=False,
                         )
                         if result is not None:
-                            jobs.set_job_status(job_id, status="success", stats=result)
-                            update_last_run_date(current_date_str)
                             logger.info("⏰ Geplanter Scan abgeschlossen.")
                         else:
-                            jobs.set_job_status(job_id, status="cancelled", stats=None, error="Scan bereits aktiv")
                             logger.info("⏭️ Geplanter Scan übersprungen (Scan läuft bereits).")
                     except Exception as scan_error:
-                        jobs.set_job_status(job_id, status="failed", stats=None, error=str(scan_error))
                         logger.error(f"Fehler beim geplanten Scan: {scan_error}")
 
             time.sleep(30)  # Alle 30 Sekunden prüfen statt 59

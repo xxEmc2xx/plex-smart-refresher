@@ -3,7 +3,6 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-import datetime as dt
 from pathlib import Path
 from typing import Any, Optional
 
@@ -23,26 +22,6 @@ def get_db_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA busy_timeout=5000;")
     return conn
-
-
-def init_jobs_db():
-    """Erstellt scan_runs Tabelle falls nicht vorhanden."""
-    with get_db_connection() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS scan_runs(
-                job_id TEXT PRIMARY KEY,
-                status TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                finished_at TEXT,
-                stats_json TEXT,
-                log_path TEXT,
-                error TEXT,
-                cancel_requested INTEGER NOT NULL DEFAULT 0
-            )
-        """)
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_scan_runs_started ON scan_runs(started_at)")
-        conn.commit()
 
 
 def mark_orphaned_jobs_interrupted(grace_minutes: int | None = None) -> int:
@@ -297,7 +276,3 @@ def cleanup_old_scan_runs(keep_last_n: int | None = None, keep_days: int | None 
         return 0
 
     return removed
-
-
-# --- Initialisierung beim Import ---
-init_jobs_db()
