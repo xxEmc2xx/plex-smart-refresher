@@ -18,6 +18,17 @@ Lokale Secrets/Runtime-Artefakte werden via .gitignore ausgeschlossen (auth.yaml
 - Mobile-optimierte Oberfläche (responsive Metriken)
 - Scheduler-Status Badge zeigt Zeitplan und letzten Lauf
 
+## ⚠️ Sicherheitshinweis
+
+Dieses Tool ist für den Einsatz im **lokalen Netzwerk** oder hinter **VPN/Zero-Trust** (Tailscale, Cloudflare Tunnel, Wireguard) konzipiert.
+
+**Nicht empfohlen:** Direkter Zugriff aus dem Internet ohne zusätzliche Absicherung.
+
+Für externen Zugriff empfohlen:
+- VPN (Wireguard, OpenVPN)
+- Zero-Trust Tunnel (Tailscale, Cloudflare Tunnel)
+- Nginx mit IP-Whitelist + Fail2ban
+
 ## Projektstruktur
 
 - app.py – UI, Background-Runner, Job-Ansicht, Auth, Startup (Orphan/Cleanup)
