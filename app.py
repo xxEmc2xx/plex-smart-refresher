@@ -63,6 +63,73 @@ _startup_cleanup_once()
 
 st.set_page_config(page_title="Plex Refresher", page_icon="🚀", layout="wide")
 
+# --- CUSTOM CSS FÜR MOBILE + DESKTOP ---
+st.markdown("""
+<style>
+    /* === GENERELL === */
+    /* Größere Metrik-Zahlen */
+    [data-testid="stMetricValue"] {
+        font-size: 1.8rem !important;
+        font-weight: 700 !important;
+    }
+    [data-testid="stMetricLabel"] {
+        font-size: 0.9rem !important;
+    }
+
+    /* Buttons besser klickbar */
+    .stButton > button {
+        min-height: 2.8rem !important;
+        font-size: 1rem !important;
+    }
+
+    /* === MOBILE (< 768px) === */
+    @media (max-width: 768px) {
+        /* Weniger Padding */
+        .block-container {
+            padding-left: 1rem !important;
+            padding-right: 1rem !important;
+            padding-top: 1rem !important;
+        }
+
+        /* Kleinere Metrik-Zahlen */
+        [data-testid="stMetricValue"] {
+            font-size: 1.4rem !important;
+        }
+
+        /* Tabs kompakter */
+        .stTabs [data-baseweb="tab-list"] {
+            gap: 0.5rem !important;
+        }
+        .stTabs [data-baseweb="tab"] {
+            padding: 0.5rem 0.8rem !important;
+            font-size: 0.85rem !important;
+        }
+
+        /* Größere Touch-Targets */
+        .stButton > button {
+            min-height: 3rem !important;
+            width: 100% !important;
+        }
+
+        .stCheckbox label {
+            font-size: 1rem !important;
+            padding: 0.5rem 0 !important;
+        }
+    }
+
+    /* === FARBEN FÜR STATUS === */
+    /* Positive Metriken (Gefixt) leicht grün */
+    div[data-testid="metric-container"]:nth-of-type(2) [data-testid="stMetricValue"] {
+        color: #4ade80 !important;
+    }
+
+    /* Negative Metriken (Fehler) leicht rot */
+    div[data-testid="metric-container"]:nth-of-type(4) [data-testid="stMetricValue"] {
+        color: #f87171 !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
 # --- INITIALISIERUNG ---
 load_dotenv()
 
@@ -198,7 +265,18 @@ def main():
     current_settings = logic.load_settings()
 
     st.title("🚀 Plex Smart Refresher")
-    
+
+    # --- SCHEDULER STATUS BADGE ---
+    schedule_active = current_settings.get("schedule_active", False)
+    schedule_time = current_settings.get("schedule_time", "04:00")
+
+    if schedule_active:
+        # Letzten Scan-Zeitpunkt aus run_state holen
+        last_run = logic.load_run_state().get("last_run_date", "Noch nie")
+        st.caption(f"⏰ Zeitplan aktiv: täglich um **{schedule_time}** Uhr · Letzter Lauf: **{last_run}**")
+    else:
+        st.caption("⏸️ Zeitplan deaktiviert · Nur manuelle Scans")
+
     # --- TABS FÜR BESSERE ÜBERSICHT ---
     tab1, tab2, tab3 = st.tabs(["🏠 Dashboard", "📊 Statistiken", "⚙️ Einstellungen"])
     
@@ -273,12 +351,11 @@ def main():
         stats_container = st.container()
         if stats_to_show:
             with stats_container:
-                c1, c2, c3, c4, c5 = st.columns(5)
                 checked = stats_to_show.get('checked', 0)
                 fixed = stats_to_show.get('fixed', 0)
                 would_fix = stats_to_show.get('would_fix', 0)
                 failed = stats_to_show.get('failed', 0)
-                
+
                 # Erfolgsrate berechnen (nur echte Fixes zählen)
                 problems_found = fixed + failed
                 if problems_found > 0:
@@ -292,18 +369,27 @@ def main():
                     rate_text = f"{rate_emoji} {success_rate:.1f}%"
                 else:
                     rate_text = "✨ Alles OK"
-                
+
+                # Reihe 1: Geprüft, Gefixt, Würde fixen
+                c1, c2, c3 = st.columns(3)
                 c1.metric("Geprüft", checked)
                 c2.metric("Gefixt", fixed)
                 c3.metric("Würde fixen", would_fix)
+
+                # Reihe 2: Fehler, Erfolgsrate
+                c4, c5 = st.columns(2)
                 c4.metric("Fehler", failed)
                 c5.metric("Erfolgsrate", rate_text)
         else:
             with stats_container:
-                c1, c2, c3, c4, c5 = st.columns(5)
+                # Reihe 1
+                c1, c2, c3 = st.columns(3)
                 c1.metric("Geprüft", "-")
                 c2.metric("Gefixt", "-")
                 c3.metric("Würde fixen", "-")
+
+                # Reihe 2
+                c4, c5 = st.columns(2)
                 c4.metric("Fehler", "-")
                 c5.metric("Erfolgsrate", "-")
 
@@ -363,16 +449,22 @@ def main():
             if not job:
                 st.info("Noch kein Job vorhanden. Starte einen Scan.")
             else:
-                c1, c2, c3 = st.columns([2, 1, 1])
-                c1.markdown(f"**Job:** `{job['job_id']}`  •  **Status:** `{job['status']}`")
-                if job.get("started_at"):
-                    c2.caption(f"Start: {job['started_at']}")
-                if job.get("finished_at"):
-                    c3.caption(f"Ende: {job['finished_at']}")
+                # Kompakte Status-Zeile
+                status_emoji = {"running": "🔄", "success": "✅", "failed": "❌", "cancelled": "🛑", "interrupted": "⚠️"}.get(job['status'], "⏸️")
+                job_id_short = job['job_id'][:8]
+                st.markdown(f"{status_emoji} **{job['status'].upper()}** · Job `{job_id_short}...`")
 
-                # Buttons
-                b1, b2 = st.columns([1, 1])
-                if b1.button("🔄 Log aktualisieren"):
+                # Zeit-Info kompakt
+                if job.get("started_at") and job.get("finished_at"):
+                    start = job['started_at'][11:19] if len(job['started_at']) > 19 else job['started_at']
+                    end = job['finished_at'][11:19] if len(job['finished_at']) > 19 else job['finished_at']
+                    st.caption(f"⏱️ {start} → {end}")
+                elif job.get("started_at"):
+                    start = job['started_at'][11:19] if len(job['started_at']) > 19 else job['started_at']
+                    st.caption(f"⏱️ Gestartet: {start}")
+
+                # Button volle Breite
+                if st.button("🔄 Log aktualisieren", use_container_width=True):
                     st.rerun()
 
 
