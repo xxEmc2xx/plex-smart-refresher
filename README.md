@@ -15,7 +15,7 @@ Lokale Secrets/Runtime-Artefakte werden via .gitignore ausgeschlossen (auth.yaml
 - Cookie-Login via streamlit-authenticator (Single-User)
 - Automatischer Scheduler: tägliche Scans zur konfigurierten Uhrzeit (startet nach erstem Browser-Zugriff)
 - Scheduler-Jobs erscheinen in der UI mit vollständigem Log
-- Mobile-optimierte Oberfläche (iPhone Safari, responsive Metriken)
+- Mobile-optimierte Oberfläche (responsive Metriken)
 - Scheduler-Status Badge zeigt Zeitplan und letzten Lauf
 
 ## Projektstruktur
